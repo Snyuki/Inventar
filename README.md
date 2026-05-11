@@ -115,7 +115,7 @@ A full API client file (`src/lib/api.ts`) is the recommended next step.
 |-----------|--------------------------|--------------------------------|
 | Frontend  | **Vercel** or Netlify    | Free, auto-deploy from GitHub  |
 | Backend   | **Render** or Railway    | Free tier, Docker support      |
-| Database  | Supabase (PostgreSQL)    | Swap SQLite → PostgreSQL in DATABASE_URL |
+| Database  | Supabase (PostgreSQL)    | PostgreSQL in DATABASE_URL |
 
 For the iPad: just navigate to your deployed URL in Safari and use
 **Add to Home Screen** → it will work like a native app.
@@ -129,7 +129,7 @@ For the iPad: just navigate to your deployed URL in Safari and use
 | `id`         | string        | UUID                               |
 | `name`       | string        | e.g. "Milk – Carton 1"             |
 | `kaufdatum`  | ISO date      | Auto-set on creation; not shown yet |
-| `expiry_date`| ISO date/null | Optional; set manually on add      |
+| `ablaufdatum`| ISO date/null | Optional; set manually on add      |
 
 Items are grouped by product type. The group accordion shows count and earliest expiry.  
 Expiry colouring: 🔴 Expired · 🟡 Expiring within 2 days · ⚪ OK · ⬛ No date set.
