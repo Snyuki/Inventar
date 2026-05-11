@@ -22,15 +22,11 @@ inventar/
 
 ---
 
-## Quick Start (MVP with mock data)
+## Quick Start
 
 ```bash
-cd frontend
-npm install
-npm run dev
+./start.sh
 ```
-
-Open http://localhost:5173 and log in with `max@example.com`.
 
 ---
 
