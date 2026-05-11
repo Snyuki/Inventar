@@ -1,6 +1,7 @@
 # Inventar
 
 An inventory web app.
+This is currently accessable at https://inventar-frontend-iota.vercel.app
 
 ---
 
@@ -24,6 +25,7 @@ inventar/
 
 ## Quick Start
 
+For Dev:
 ```bash
 ./start.sh
 ```
@@ -54,30 +56,7 @@ Vite proxies `/api/*` to the FastAPI backend automatically.
 
 ---
 
-## Auth: Replacing the stub with Google OAuth
-
-### What to do
-
-1. Create a **Supabase** project at https://supabase.com (free tier)
-2. Enable **Google** as an OAuth provider in Auth → Providers
-3. Add your Google OAuth Client ID + Secret from Google Cloud Console
-4. Install the Supabase client:
-   ```bash
-   npm install @supabase/supabase-js
-   ```
-5. Create `frontend/src/lib/supabase.ts`:
-   ```ts
-   import { createClient } from '@supabase/supabase-js';
-   export const supabase = createClient(
-     import.meta.env.VITE_SUPABASE_URL,
-     import.meta.env.VITE_SUPABASE_ANON_KEY
-   );
-   ```
-6. Replace the demo login in `LoginScreen.tsx` with:
-   ```ts
-   await supabase.auth.signInWithOAuth({ provider: 'google' });
-   ```
-7. On the backend, verify the Supabase JWT instead of the stub.
+## Auth
 
 ### Whitelist approach (invite-only)
 In Supabase → Auth → Settings you can restrict sign-ups. For a stricter whitelist:
@@ -87,31 +66,13 @@ In Supabase → Auth → Settings you can restrict sign-ups. For a stricter whit
 
 ---
 
-## Connecting Frontend to Backend
-
-In `App.tsx`, replace the mock data and CRUD handlers with API calls.
-
-Example for loading groups:
-```ts
-// Add this hook at the top of App()
-useEffect(() => {
-  fetch('/api/groups', { headers: { 'X-User-Email': user! } })
-    .then(r => r.json())
-    .then(data => setGroups(data.map(backendToFrontend)));
-}, [user]);
-```
-
-A full API client file (`src/lib/api.ts`) is the recommended next step.
-
----
-
 ## Deployment
 
 | Part      | Recommended host         | Notes                          |
 |-----------|--------------------------|--------------------------------|
-| Frontend  | **Vercel** or Netlify    | Free, auto-deploy from GitHub  |
-| Backend   | **Render** or Railway    | Free tier, Docker support      |
-| Database  | Supabase (PostgreSQL)    | PostgreSQL in DATABASE_URL |
+| Frontend  | **Vercel**   | Free-Tier; Auto-deploy from GitHub  |
+| Backend   | **Render**    | Free-Tier; Auto-Deploy from GitHub      |
+| Database  | **Supabase**    | PostgreSQL |
 
 For the iPad: just navigate to your deployed URL in Safari and use
 **Add to Home Screen** → it will work like a native app.
