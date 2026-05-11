@@ -25,7 +25,7 @@ import {
   today,
 } from "./lib/utils";
 import { supabase } from './lib/supabase'
-import { Session } from '@supabase/supabase-js'
+import { AuthChangeEvent, Session } from '@supabase/supabase-js'
 import { checkWhitelist, fetchGroups, createGroup, addItem, updateItem, deleteItem } from "./lib/api";
 
 
@@ -83,7 +83,7 @@ export default function App() {
   // ---- Auth handlers --------------------------------------------------
   useEffect(() => {
     setCheckingAuth(true);
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event: AuthChangeEvent, session: Session | null) => {
       if (session) {
         try {
           const allowed = await checkWhitelist(session.access_token);
