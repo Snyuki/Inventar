@@ -65,6 +65,8 @@ export default function App() {
   const [editName,   setEditName]   = useState("");
   const [editExpiry, setEditExpiry] = useState("");
   const [atgExpiry,  setAtgExpiry]  = useState("");
+  const [newCount,  setNewCount]    = useState(1);
+  const [atgCount,  setAtgCount]    = useState(1);
 
   // UI state
   const [search,        setSearch]        = useState("");
@@ -192,15 +194,22 @@ export default function App() {
     setFormError(null);
     try {
       const existingGroup = groups.find(g => g.groupName.toLowerCase() === newGroup.trim().toLowerCase());
-      if (existingGroup) {
-        const item = await addItem(existingGroup.id, newName.trim(), newExpiry || null);
-        setGroups(prev => prev.map(g => g.id === existingGroup.id ? { ...g, items: [...g.items, item] } : g));
-      } else {
-        const group = await createGroup(newGroup.trim());
-        const item = await addItem(group.id, newName.trim(), newExpiry || null);
-        setGroups(prev => [...prev, { ...group, items: [item] }]);
-      }
-      setNewGroup(""); setNewName(""); setNewExpiry(""); setAddOpen(false);
+      const targetGroup = existingGroup ?? await createGroup(newGroup.trim());
+      
+      const newItems = await Promise.all(
+        Array.from({ length: newCount }, () =>
+          addItem(targetGroup.id, newName.trim(), newExpiry || null)
+        )
+      );
+
+      setGroups(prev => {
+        const exists = prev.find(g => g.id === targetGroup.id);
+        if (exists) {
+          return prev.map(g => g.id === targetGroup.id ? { ...g, items: [...g.items, ...newItems] } : g);
+        }
+        return [...prev, { ...targetGroup, items: newItems }];
+      });
+      setNewGroup(""); setNewName(""); setNewExpiry(""); setNewCount(1); setAddOpen(false);
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Failed to add item.");
     }
@@ -212,13 +221,13 @@ export default function App() {
     const group = groups.find(g => g.id === atgTarget);
     if (!group) return;
     try {
-      const item = await addItem(
-        group.id,
-        `${group.groupName} – Item ${group.items.length + 1}`,
-        atgExpiry || null
+      const newItems = await Promise.all(
+        Array.from({ length: atgCount }, (_, i) =>
+          addItem(group.id, `${group.groupName}`, atgExpiry || null)
+        )
       );
-      setGroups(prev => prev.map(g => g.id === atgTarget ? { ...g, items: [...g.items, item] } : g));
-      setAtgExpiry(""); setAtgOpen(false);
+      setGroups(prev => prev.map(g => g.id === atgTarget ? { ...g, items: [...g.items, ...newItems] } : g));
+      setAtgExpiry(""); setAtgCount(1); setAtgOpen(false);
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Failed to add item.");
     }
@@ -315,6 +324,31 @@ export default function App() {
     }
     return { cls, label, s };
   };
+
+  function CountPicker({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+    const counts = Array.from({ length: 20 }, (_, i) => i + 1);
+    return (
+      <div>
+        <label className="block mb-2 text-sm text-gray-700">Anzahl</label>
+        <div className="flex gap-2 overflow-x-auto pb-1 snap-x">
+          {counts.map(n => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => onChange(n)}
+              className={`flex-shrink-0 w-10 h-10 rounded-lg text-sm font-medium snap-start transition-colors
+                ${value === n
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   // ---- Show nothing while checking for an existing session ---------
   if (checkingAuth) return null;
@@ -535,7 +569,7 @@ export default function App() {
       </div>
 
       {/* ── Add Item dialog ── */}
-      <Dialog.Root open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) setFormError(null); }}>
+      <Dialog.Root open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) setFormError(null); setNewCount(1); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -556,6 +590,7 @@ export default function App() {
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
                 <input type="date" value={newExpiry} onChange={e => setNewExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
+              <CountPicker value={newCount} onChange={setNewCount} />
               {formError && (
                 <p className="text-sm text-red-600">{formError}</p>
               )}
@@ -566,7 +601,7 @@ export default function App() {
       </Dialog.Root>
 
       {/* ── Add to Group dialog ── */}
-      <Dialog.Root open={atgOpen} onOpenChange={(open) => { setAtgOpen(open); if (!open) setFormError(null); }}>
+      <Dialog.Root open={atgOpen} onOpenChange={(open) => { setAtgOpen(open); if (!open) setFormError(null); setAtgCount(1); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -579,6 +614,7 @@ export default function App() {
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
                 <input type="date" value={atgExpiry} onChange={e => setAtgExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
+              <CountPicker value={atgCount} onChange={setAtgCount} />
               {formError && (
                 <p className="text-sm text-red-600">{formError}</p>
               )}
