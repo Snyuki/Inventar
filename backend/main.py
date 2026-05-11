@@ -3,6 +3,7 @@ from datetime import date
 from typing import Optional
 import os
 import uuid
+import re
  
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status
@@ -12,7 +13,7 @@ import jwt as pyjwt
 from jwt import PyJWKClient
 import databases
 import sqlalchemy
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from dotenv import load_dotenv
 
@@ -123,6 +124,19 @@ def get_current_user(
 class ItemIn(BaseModel):
     name: str
     ablaufdatum: Optional[str] = None   # "YYYY-MM-DD" or null
+
+    @field_validator("ablaufdatum")
+    @classmethod
+    def validate_ablaufdatum(cls, v):
+        if v is None:
+            return v
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("Ablaufdatum must be in YYYY-MM-DD format")
+        try:
+            date.fromisoformat(v)
+        except ValueError:
+            raise ValueError(f"Invalid date: {v}")
+        return v
 
 class ItemOut(BaseModel):
     id: str

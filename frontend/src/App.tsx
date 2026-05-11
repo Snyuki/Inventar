@@ -15,7 +15,7 @@ import {
   Download,
   SlidersHorizontal,
 } from "lucide-react";
-import { format } from "date-fns";
+import { format, parse } from "date-fns";
 import LoginScreen from "./components/LoginScreen";
 import { Item, ItemGroup } from "./types";
 import {
@@ -28,37 +28,6 @@ import { supabase } from './lib/supabase'
 import { Session } from '@supabase/supabase-js'
 import { checkWhitelist, fetchGroups, createGroup, addItem, updateItem, deleteItem } from "./lib/api";
 
-// -------------------------------------------------------------------
-// Mock data – replace with API calls once backend is connected
-// -------------------------------------------------------------------
-const mockData: ItemGroup[] = [
-  {
-    id: "g1",
-    groupName: "Milk",
-    items: [
-      { id: "i1a", name: "Milk – Carton 1", ablaufdatum: "2026-05-15", kaufdatum: today() },
-      { id: "i1b", name: "Milk – Carton 2", ablaufdatum: "2026-05-18", kaufdatum: today() },
-      { id: "i1c", name: "Milk – Carton 3", ablaufdatum: "2026-05-20", kaufdatum: today() },
-    ],
-  },
-  {
-    id: "g2",
-    groupName: "Eggs",
-    items: [
-      { id: "i2a", name: "Eggs – Dozen Pack 1", ablaufdatum: "2026-05-25", kaufdatum: today() },
-      { id: "i2b", name: "Eggs – Dozen Pack 2", ablaufdatum: "2026-05-28", kaufdatum: today() },
-    ],
-  },
-  {
-    id: "g3",
-    groupName: "Bread",
-    items: [
-      { id: "i3a", name: "Bread – Whole Wheat", ablaufdatum: "2026-05-12", kaufdatum: today() },
-      { id: "i3b", name: "Bread – Sourdough", ablaufdatum: "2026-05-11", kaufdatum: today() },
-      { id: "i3c", name: "Bread – Rye", ablaufdatum: "2026-05-16", kaufdatum: today() },
-    ],
-  },
-];
 
 // -------------------------------------------------------------------
 // Types
@@ -72,12 +41,13 @@ export default function App() {
   const [session, setSession]           = useState<Session | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(false);
   const [authError, setAuthError]       = useState<string | null>(null);
-  const user = session?.user.email ?? null;
 
   // Data
-  const [groups, setGroups]             = useState<ItemGroup[]>([]);
-  const [dataLoading, setDataLoading]   = useState(false);
-  const [dataError, setDataError]       = useState<string | null>(null);
+  const [groups, setGroups]               = useState<ItemGroup[]>([]);
+  const [dataLoading, setDataLoading]     = useState(false);
+  const [dataError, setDataError]         = useState<string | null>(null);
+  const [formError, setFormError]         = useState<string | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false); 
 
   // Dialogs
   const [addOpen,      setAddOpen]      = useState(false);
@@ -110,57 +80,27 @@ export default function App() {
 
   // ---- Auth handlers --------------------------------------------------
   useEffect(() => {
-    // Get session on load
-    const timeout = setTimeout(() => {
-      setCheckingAuth(false);
-    }, 3000);
-
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!data.session) {
-        setCheckingAuth(false);
-        clearTimeout(timeout);
-        return;
-      }
-      try {
-        const allowed = await checkWhitelist();
-        if (!allowed) {
-          await supabase.auth.signOut();
-          setSession(null);
-        } else {
-          setSession(data.session);
-        }
-      } catch (e) {
-        console.error("Auth check failed:", e);
-        setSession(data.session); // fail open
-      } finally {
-        setCheckingAuth(false);
-        clearTimeout(timeout);
-      }
-    }).catch(() => {
-      setCheckingAuth(false);
-      clearTimeout(timeout);
-    });
-
-    // Listen for login/logout
+    setCheckingAuth(true);
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session) {
         try {
-          const allowed = await checkWhitelist();
+          const allowed = await checkWhitelist(session.access_token);
           if (!allowed) {
             await supabase.auth.signOut();
             setSession(null);
-            setAuthError("Access denied. You are not on the invited list.")
+            setAuthError("Access denied. You are not on the invited list.");
           } else {
             setSession(session);
-            setAuthError(null)
+            setAuthError(null);
           }
         } catch (e) {
-          console.error("onAuthStateChange whitelist check failed:", e);
+          console.error("Whitelist check failed:", e);
           setSession(session);
         }
       } else {
         setSession(null);
       }
+      setCheckingAuth(false);  // always mark ready after first event
     });
 
     return () => subscription.unsubscribe();
@@ -180,7 +120,6 @@ export default function App() {
     await supabase.auth.signOut();
     setSession(null);
   };
-
 
   // ---- Filter helpers -------------------------------------------------
   const toggleFilter = (f: string) =>
@@ -250,6 +189,7 @@ export default function App() {
 
   const handleAddItem = async () => {
     if (!newGroup.trim() || !newName.trim()) return;
+    setFormError(null);
     try {
       const existingGroup = groups.find(g => g.groupName.toLowerCase() === newGroup.trim().toLowerCase());
       if (existingGroup) {
@@ -261,13 +201,14 @@ export default function App() {
         setGroups(prev => [...prev, { ...group, items: [item] }]);
       }
       setNewGroup(""); setNewName(""); setNewExpiry(""); setAddOpen(false);
-    } catch {
-      alert("Failed to add item.");
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Failed to add item.");
     }
   };
 
   const handleAddToGroup = async () => {
     if (!atgTarget) return;
+    setFormError(null);
     const group = groups.find(g => g.id === atgTarget);
     if (!group) return;
     try {
@@ -278,8 +219,8 @@ export default function App() {
       );
       setGroups(prev => prev.map(g => g.id === atgTarget ? { ...g, items: [...g.items, item] } : g));
       setAtgExpiry(""); setAtgOpen(false);
-    } catch {
-      alert("Failed to add item.");
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Failed to add item.");
     }
   };
 
@@ -292,6 +233,7 @@ export default function App() {
 
   const handleSaveEdit = async () => {
     if (!editTarget || !editName.trim()) return;
+    setFormError(null);
     try {
       const updated = await updateItem(editTarget.item.id, editName.trim(), editExpiry || null);
       setGroups(prev => prev.map(g =>
@@ -300,8 +242,8 @@ export default function App() {
           : g
       ));
       setEditOpen(false);
-    } catch {
-      alert("Failed to save changes.");
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Failed to save changes.");
     }
   };
 
@@ -310,16 +252,22 @@ export default function App() {
   };
   const handleDelete = async () => {
     if (!deleteTarget) return;
+    setDeleteLoading(true);
+    setFormError(null);
     try {
       await deleteItem(deleteTarget.itemId);
       setGroups(prev =>
         prev
-          .map(g => g.id === deleteTarget.groupId ? { ...g, items: g.items.filter(i => i.id !== deleteTarget.itemId) } : g)
+          .map(g => g.id === deleteTarget.groupId
+            ? { ...g, items: g.items.filter(i => i.id !== deleteTarget.itemId) }
+            : g)
           .filter(g => g.items.length > 0)
       );
       setDeleteOpen(false);
-    } catch {
-      alert("Failed to delete item.");
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Failed to delete item.");
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -357,9 +305,14 @@ export default function App() {
     const s = itemStatus(item);
     const cls    = s === "expired" ? "text-red-600 font-medium" : s === "expiring" ? "text-yellow-600 font-medium" : "text-gray-500";
     const suffix = s === "expired" ? " (Expired)" : s === "expiring" ? " (Expiring Soon)" : "";
-    const label  = item.ablaufdatum
-      ? format(new Date(item.ablaufdatum + "T00:00:00"), "MMM dd, yyyy") + suffix
-      : "Not set";
+    
+    let label = "Not set";
+    if (item.ablaufdatum) {
+      const parsed = new Date(item.ablaufdatum + "T00:00:00");
+      label = isNaN(parsed.getTime())
+        ? "Ungültiges Datum"
+        : format(parsed, "dd.MM.yyyy") + suffix
+    }
     return { cls, label, s };
   };
 
@@ -502,7 +455,7 @@ export default function App() {
               {groups.map(group => {
                 const gs  = groupStatus(group);
                 const exp = earliestExpiry(group);
-                const subText     = exp ? `Expires: ${format(new Date(exp + "T00:00:00"), "MMM dd, yyyy")}` : "No expiry dates set";
+                const subText     = exp ? `Expires: ${format(new Date(exp + "T00:00:00"), "dd.MM.yyyy")}` : "No expiry dates set";
                 const groupBorder = gs === "expired" ? "border-red-400 bg-red-50/50" : gs === "expiring" ? "border-yellow-400 bg-yellow-50/50" : "border-gray-200";
                 const headerBg    = gs === "expired" ? "bg-red-50 hover:bg-red-100"  : gs === "expiring" ? "bg-yellow-50 hover:bg-yellow-100"  : "bg-white hover:bg-gray-50";
 
@@ -582,7 +535,7 @@ export default function App() {
       </div>
 
       {/* ── Add Item dialog ── */}
-      <Dialog.Root open={addOpen} onOpenChange={setAddOpen}>
+      <Dialog.Root open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) setFormError(null); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -603,6 +556,9 @@ export default function App() {
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
                 <input type="date" value={newExpiry} onChange={e => setNewExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
+              {formError && (
+                <p className="text-sm text-red-600">{formError}</p>
+              )}
               <button onClick={handleAddItem} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Add Item</button>
             </div>
           </Dialog.Content>
@@ -610,7 +566,7 @@ export default function App() {
       </Dialog.Root>
 
       {/* ── Add to Group dialog ── */}
-      <Dialog.Root open={atgOpen} onOpenChange={setAtgOpen}>
+      <Dialog.Root open={atgOpen} onOpenChange={(open) => { setAtgOpen(open); if (!open) setFormError(null); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -623,6 +579,9 @@ export default function App() {
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
                 <input type="date" value={atgExpiry} onChange={e => setAtgExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
+              {formError && (
+                <p className="text-sm text-red-600">{formError}</p>
+              )}
               <button onClick={handleAddToGroup} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">Add Item</button>
             </div>
           </Dialog.Content>
@@ -630,7 +589,7 @@ export default function App() {
       </Dialog.Root>
 
       {/* ── Edit dialog ── */}
-      <Dialog.Root open={editOpen} onOpenChange={setEditOpen}>
+      <Dialog.Root open={editOpen} onOpenChange={(open) => { setEditOpen(open); if (!open) setFormError(null); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -647,6 +606,9 @@ export default function App() {
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
                 <input type="date" value={editExpiry} onChange={e => setEditExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
+              {formError && (
+                <p className="text-sm text-red-600">{formError}</p>
+              )}
               <button onClick={handleSaveEdit} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Save Changes</button>
             </div>
           </Dialog.Content>
@@ -654,20 +616,23 @@ export default function App() {
       </Dialog.Root>
 
       {/* ── Delete confirm ── */}
-      <AlertDialog.Root open={deleteOpen} onOpenChange={setDeleteOpen}>
+      <AlertDialog.Root open={deleteOpen} onOpenChange={(open) => { setDeleteOpen(open); if (!open) setFormError(null); }}>
         <AlertDialog.Portal>
           <AlertDialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-          <AlertDialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
+          <AlertDialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
             <AlertDialog.Title className="font-medium text-gray-900 mb-2">Delete Item</AlertDialog.Title>
             <AlertDialog.Description className="text-sm text-gray-600 mb-6">
               Are you sure you want to delete this item? This action cannot be undone.
             </AlertDialog.Description>
+            {formError && (
+              <p className="text-sm text-red-600">{formError}</p>
+            )}
             <div className="flex justify-end gap-3">
               <AlertDialog.Cancel asChild>
                 <button className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
               </AlertDialog.Cancel>
               <AlertDialog.Action asChild>
-                <button onClick={handleDelete} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">Delete</button>
+                <button onClick={handleDelete} disabled={deleteLoading} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">{deleteLoading ? "Löschen..." : "Löschen"}</button>
               </AlertDialog.Action>
             </div>
           </AlertDialog.Content>
