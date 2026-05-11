@@ -285,16 +285,25 @@ export default function App() {
 
   const searchResults = useMemo(() => {
     const q = search.toLowerCase();
-    const results: Array<{ item: Item; groupName: string; groupId: string }> = [];
+    const allItems: Array<{ item: Item; groupName: string; groupId: string }> = [];
     groups.forEach(group =>
       group.items.forEach(item => {
         const s = itemStatus(item);
         const matchText   = !q || item.name.toLowerCase().includes(q) || group.groupName.toLowerCase().includes(q);
         const matchFilter = activeFilters.length === 0 || activeFilters.includes(s);
-        if (matchText && matchFilter) results.push({ item, groupName: group.groupName, groupId: group.id });
+        if (matchText && matchFilter) allItems.push({ item, groupName: group.groupName, groupId: group.id });
       })
     );
-    return results;
+    const byGroup = new Map<string, { groupName: string; items: Item[] }>();
+    for (const { item, groupName, groupId } of allItems) {
+      if (!byGroup.has(groupId)) byGroup.set(groupId, { groupName, items: [] });
+      byGroup.get(groupId)!.items.push(item);
+    }
+    const result: VisualGroup[] = [];
+    for (const [groupId, { groupName, items }] of byGroup) {
+      result.push(...toVisualGroups(items, groupId, groupName));
+    }
+    return result;
   }, [search, groups, activeFilters]);
 
   // ---- Style helpers --------------------------------------------------
@@ -348,6 +357,37 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  interface VisualGroup {
+    key: string;
+    name: string;
+    ablaufdatum: string | null;
+    count: number;
+    representativeId: string; // ID of one item, used for edit/delete
+    groupId: string;
+    groupName: string;
+  }
+
+  function toVisualGroups(items: Item[], groupId: string, groupName: string): VisualGroup[] {
+    const map = new Map<string, VisualGroup>();
+    for (const item of items) {
+      const key = `${groupId}::${item.name}::${item.ablaufdatum ?? ""}`;
+      if (map.has(key)) {
+        map.get(key)!.count++;
+      } else {
+        map.set(key, {
+          key,
+          name: item.name,
+          ablaufdatum: item.ablaufdatum,
+          count: 1,
+          representativeId: item.id,
+          groupId,
+          groupName,
+        });
+      }
+    }
+    return Array.from(map.values());
   }
 
   // ---- Show nothing while checking for an existing session ---------
@@ -440,37 +480,42 @@ export default function App() {
           {/* ── Search/filter mode: flat list ── */}
           {!dataLoading && !dataError && (isSearching ? (
             <div className="space-y-2">
-              {searchResults.length > 0 ? searchResults.map(({ item, groupName, groupId }) => {
-                const { cls, label, s } = itemDateInfo(item);
+              {searchResults.length > 0 ? searchResults.map(vg => {
+                const { cls, label, s } = itemDateInfo({ id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" });
                 const border = s === "expired" ? "border-red-400" : s === "expiring" ? "border-yellow-400" : "border-gray-200";
-                const bg     = s === "expired" ? "bg-red-50"     : s === "expiring" ? "bg-yellow-50"     : "bg-white";
+                const bg     = s === "expired" ? "bg-red-50"      : s === "expiring" ? "bg-yellow-50"      : "bg-white";
                 return (
-                  <div key={item.id} className={`relative overflow-hidden rounded border swipeable-item ${border}`}>
+                  <div key={vg.key} className={`relative overflow-hidden rounded border swipeable-item ${border}`}>
                     <div className="absolute inset-0 bg-red-600 flex items-center justify-end px-6">
                       <Trash2 className="w-5 h-5 text-white" />
                     </div>
                     <div
                       className={`flex items-center justify-between p-3 relative ${bg}`}
-                      style={swipeStyle(item.id)}
-                      onTouchMove={swipeState?.itemId === item.id ? handleTouchMove : undefined}
-                      onTouchEnd={swipeState?.itemId === item.id ? () => handleTouchEnd(groupId, item.id) : undefined}
-                      onMouseMove={swipeState?.itemId === item.id ? handleMouseMove : undefined}
-                      onMouseUp={swipeState?.itemId === item.id ? () => handleMouseUp(groupId, item.id) : undefined}
-                      onMouseLeave={() => { if (swipeState?.itemId === item.id) handleMouseUp(groupId, item.id); }}
+                      style={swipeStyle(vg.representativeId)}
+                      onTouchMove={swipeState?.itemId === vg.representativeId ? handleTouchMove : undefined}
+                      onTouchEnd={swipeState?.itemId === vg.representativeId ? () => handleTouchEnd(vg.groupId, vg.representativeId) : undefined}
+                      onMouseMove={swipeState?.itemId === vg.representativeId ? handleMouseMove : undefined}
+                      onMouseUp={swipeState?.itemId === vg.representativeId ? () => handleMouseUp(vg.groupId, vg.representativeId) : undefined}
+                      onMouseLeave={() => { if (swipeState?.itemId === vg.representativeId) handleMouseUp(vg.groupId, vg.representativeId); }}
                     >
                       <div className="flex flex-col">
-                        <span className="text-gray-900">{item.name}</span>
-                        <span className="text-xs text-gray-500">Group: {groupName}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-900">{vg.name}</span>
+                          {vg.count > 1 && (
+                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">×{vg.count}</span>
+                          )}
+                        </div>
+                        <span className="text-xs text-gray-500">Gruppe: {vg.groupName}</span>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className={`text-sm ${cls}`}>{label}</span>
-                        <button onClick={() => openEdit(groupId, item)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors">
+                        <button onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" })} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors">
                           <Edit className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={e => { e.stopPropagation(); openDelete(groupId, item.id); }}
-                          onTouchStart={e => handleTouchStart(e, item.id)}
-                          onMouseDown={e => handleMouseDown(e, item.id)}
+                          onClick={e => { e.stopPropagation(); openDelete(vg.groupId, vg.representativeId); }}
+                          onTouchStart={e => handleTouchStart(e, vg.representativeId)}
+                          onMouseDown={e => handleMouseDown(e, vg.representativeId)}
                           className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer select-none"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -522,32 +567,37 @@ export default function App() {
                     <Accordion.Content className="overflow-hidden data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up">
                       <div className="bg-gray-50 p-4 border-t border-gray-200">
                         <div className="space-y-2">
-                          {group.items.map(item => {
-                            const { cls, label } = itemDateInfo(item);
+                          {toVisualGroups(group.items, group.id, group.groupName).map(vg => {
+                            const { cls, label, s } = itemDateInfo({ id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" });
                             return (
-                              <div key={item.id} className="relative overflow-hidden rounded border border-gray-200 swipeable-item">
+                              <div key={vg.key} className="relative overflow-hidden rounded border border-gray-200 swipeable-item">
                                 <div className="absolute inset-0 bg-red-600 flex items-center justify-end px-6">
                                   <Trash2 className="w-5 h-5 text-white" />
                                 </div>
                                 <div
                                   className="flex items-center justify-between p-3 bg-white relative"
-                                  style={swipeStyle(item.id)}
-                                  onTouchMove={swipeState?.itemId === item.id ? handleTouchMove : undefined}
-                                  onTouchEnd={swipeState?.itemId === item.id ? () => handleTouchEnd(group.id, item.id) : undefined}
-                                  onMouseMove={swipeState?.itemId === item.id ? handleMouseMove : undefined}
-                                  onMouseUp={swipeState?.itemId === item.id ? () => handleMouseUp(group.id, item.id) : undefined}
-                                  onMouseLeave={() => { if (swipeState?.itemId === item.id) handleMouseUp(group.id, item.id); }}
+                                  style={swipeStyle(vg.representativeId)}
+                                  onTouchMove={swipeState?.itemId === vg.representativeId ? handleTouchMove : undefined}
+                                  onTouchEnd={swipeState?.itemId === vg.representativeId ? () => handleTouchEnd(vg.groupId, vg.representativeId) : undefined}
+                                  onMouseMove={swipeState?.itemId === vg.representativeId ? handleMouseMove : undefined}
+                                  onMouseUp={swipeState?.itemId === vg.representativeId ? () => handleMouseUp(vg.groupId, vg.representativeId) : undefined}
+                                  onMouseLeave={() => { if (swipeState?.itemId === vg.representativeId) handleMouseUp(vg.groupId, vg.representativeId); }}
                                 >
-                                  <span className="text-gray-900">{item.name}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-900">{vg.name}</span>
+                                    {vg.count > 1 && (
+                                      <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">×{vg.count}</span>
+                                    )}
+                                  </div>
                                   <div className="flex items-center gap-3">
                                     <span className={`text-sm ${cls}`}>{label}</span>
-                                    <button onClick={() => openEdit(group.id, item)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors">
+                                    <button onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" })} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors">
                                       <Edit className="w-4 h-4" />
                                     </button>
                                     <button
-                                      onClick={e => { e.stopPropagation(); openDelete(group.id, item.id); }}
-                                      onTouchStart={e => handleTouchStart(e, item.id)}
-                                      onMouseDown={e => handleMouseDown(e, item.id)}
+                                      onClick={e => { e.stopPropagation(); openDelete(vg.groupId, vg.representativeId); }}
+                                      onTouchStart={e => handleTouchStart(e, vg.representativeId)}
+                                      onMouseDown={e => handleMouseDown(e, vg.representativeId)}
                                       className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer select-none"
                                     >
                                       <Trash2 className="w-4 h-4" />
