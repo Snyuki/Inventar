@@ -290,7 +290,8 @@ export default function App() {
       group.items.forEach(item => {
         const s = itemStatus(item);
         const matchText   = !q || item.name.toLowerCase().includes(q) || group.groupName.toLowerCase().includes(q);
-        const matchFilter = activeFilters.length === 0 || activeFilters.includes(s);
+        const matchFilter = activeFilters.length === 0 || activeFilters.includes(s) ||
+          (activeFilters.includes("ok") && s === "expiring");
         if (matchText && matchFilter) allItems.push({ item, groupName: group.groupName, groupId: group.id });
       })
     );
