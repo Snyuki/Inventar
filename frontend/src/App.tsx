@@ -100,7 +100,7 @@ export default function App() {
       } else {
         setSession(null);
       }
-      setCheckingAuth(false);  // always mark ready after first event
+      setCheckingAuth(false);
     });
 
     return () => subscription.unsubscribe();
@@ -546,7 +546,7 @@ export default function App() {
             <div className="space-y-4">
               <div>
                 <label className="block mb-2 text-sm text-gray-700">Group Name</label>
-                <input type="text" value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="e.g., Milk, Eggs, Bread" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input type="text" value={newGroup} onChange={e => { setNewGroup(e.target.value); setNewName(e.target.value); } } placeholder="e.g., Milk, Eggs, Bread" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
                 <label className="block mb-2 text-sm text-gray-700">Item Name</label>
