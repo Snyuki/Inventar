@@ -1,0 +1,678 @@
+import { useState, useMemo, useEffect } from "react";
+import * as Accordion from "@radix-ui/react-accordion";
+import * as Dialog from "@radix-ui/react-dialog";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import {
+  ChevronDown,
+  Plus,
+  Trash2,
+  X,
+  Edit,
+  Search,
+  Settings,
+  LogOut,
+  Download,
+  SlidersHorizontal,
+} from "lucide-react";
+import { format } from "date-fns";
+import LoginScreen from "./components/LoginScreen";
+import { Item, ItemGroup } from "./types";
+import {
+  itemStatus,
+  groupStatus,
+  earliestExpiry,
+  today,
+} from "./lib/utils";
+import { supabase } from './lib/supabase'
+import { Session } from '@supabase/supabase-js'
+import { checkWhitelist, fetchGroups, createGroup, addItem, updateItem, deleteItem } from "./lib/api";
+
+// -------------------------------------------------------------------
+// Mock data – replace with API calls once backend is connected
+// -------------------------------------------------------------------
+const mockData: ItemGroup[] = [
+  {
+    id: "g1",
+    groupName: "Milk",
+    items: [
+      { id: "i1a", name: "Milk – Carton 1", ablaufdatum: "2026-05-15", kaufdatum: today() },
+      { id: "i1b", name: "Milk – Carton 2", ablaufdatum: "2026-05-18", kaufdatum: today() },
+      { id: "i1c", name: "Milk – Carton 3", ablaufdatum: "2026-05-20", kaufdatum: today() },
+    ],
+  },
+  {
+    id: "g2",
+    groupName: "Eggs",
+    items: [
+      { id: "i2a", name: "Eggs – Dozen Pack 1", ablaufdatum: "2026-05-25", kaufdatum: today() },
+      { id: "i2b", name: "Eggs – Dozen Pack 2", ablaufdatum: "2026-05-28", kaufdatum: today() },
+    ],
+  },
+  {
+    id: "g3",
+    groupName: "Bread",
+    items: [
+      { id: "i3a", name: "Bread – Whole Wheat", ablaufdatum: "2026-05-12", kaufdatum: today() },
+      { id: "i3b", name: "Bread – Sourdough", ablaufdatum: "2026-05-11", kaufdatum: today() },
+      { id: "i3c", name: "Bread – Rye", ablaufdatum: "2026-05-16", kaufdatum: today() },
+    ],
+  },
+];
+
+// -------------------------------------------------------------------
+// Types
+// -------------------------------------------------------------------
+type EditTarget   = { groupId: string; item: Item } | null;
+type DeleteTarget = { groupId: string; itemId: string } | null;
+type ATGTarget    = string | null;
+
+export default function App() {
+  // Auth
+  const [session, setSession]           = useState<Session | null>(null);
+  const [checkingAuth, setCheckingAuth] = useState(false);
+  const [authError, setAuthError]       = useState<string | null>(null);
+  const user = session?.user.email ?? null;
+
+  // Data
+  const [groups, setGroups]             = useState<ItemGroup[]>([]);
+  const [dataLoading, setDataLoading]   = useState(false);
+  const [dataError, setDataError]       = useState<string | null>(null);
+
+  // Dialogs
+  const [addOpen,      setAddOpen]      = useState(false);
+  const [editOpen,     setEditOpen]     = useState(false);
+  const [atgOpen,      setAtgOpen]      = useState(false);
+  const [deleteOpen,   setDeleteOpen]   = useState(false);
+  const [editTarget,   setEditTarget]   = useState<EditTarget>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
+  const [atgTarget,    setAtgTarget]    = useState<ATGTarget>(null);
+
+  // Form fields
+  const [newGroup,   setNewGroup]   = useState("");
+  const [newName,    setNewName]    = useState("");
+  const [newExpiry,  setNewExpiry]  = useState("");
+  const [editName,   setEditName]   = useState("");
+  const [editExpiry, setEditExpiry] = useState("");
+  const [atgExpiry,  setAtgExpiry]  = useState("");
+
+  // UI state
+  const [search,        setSearch]        = useState("");
+  const [activeFilters, setActiveFilters] = useState<string[]>([]);
+
+  // Swipe-to-delete state
+  const [swipeState, setSwipeState] = useState<{
+    itemId: string;
+    offset: number;
+    rowWidth: number;
+  } | null>(null);
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+
+  // ---- Auth handlers --------------------------------------------------
+  useEffect(() => {
+    // Get session on load
+    const timeout = setTimeout(() => {
+      setCheckingAuth(false);
+    }, 3000);
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!data.session) {
+        setCheckingAuth(false);
+        clearTimeout(timeout);
+        return;
+      }
+      try {
+        const allowed = await checkWhitelist();
+        if (!allowed) {
+          await supabase.auth.signOut();
+          setSession(null);
+        } else {
+          setSession(data.session);
+        }
+      } catch (e) {
+        console.error("Auth check failed:", e);
+        setSession(data.session); // fail open
+      } finally {
+        setCheckingAuth(false);
+        clearTimeout(timeout);
+      }
+    }).catch(() => {
+      setCheckingAuth(false);
+      clearTimeout(timeout);
+    });
+
+    // Listen for login/logout
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session) {
+        try {
+          const allowed = await checkWhitelist();
+          if (!allowed) {
+            await supabase.auth.signOut();
+            setSession(null);
+            setAuthError("Access denied. You are not on the invited list.")
+          } else {
+            setSession(session);
+            setAuthError(null)
+          }
+        } catch (e) {
+          console.error("onAuthStateChange whitelist check failed:", e);
+          setSession(session);
+        }
+      } else {
+        setSession(null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    setDataLoading(true);
+    setDataError(null);
+    fetchGroups()
+    .then(setGroups)
+    .catch(() => setDataError("Failed to load inventory. Is the backend running?"))
+    .finally(() => setDataLoading(false));
+  }, [session]);
+
+  const handleLogout = async () => { 
+    await supabase.auth.signOut();
+    setSession(null);
+  };
+
+
+  // ---- Filter helpers -------------------------------------------------
+  const toggleFilter = (f: string) =>
+    setActiveFilters(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]);
+
+  const filters = [
+    { id: "expired",  label: "Expired",      color: "red"    },
+    { id: "expiring", label: "Expiring Soon", color: "yellow" },
+    { id: "ok",       label: "Not Expired",   color: "green"  },
+    { id: "noexp",    label: "No Expiry",     color: "gray"   },
+  ];
+
+
+  // ---- Swipe helpers --------------------------------------------------
+  const handleTouchStart = (e: React.TouchEvent, itemId: string) => {
+    const target = e.currentTarget.closest(".swipeable-item") as HTMLElement;
+    if (!target) return;
+    setTouchStart(e.touches[0].clientX);
+    setSwipeState({ itemId, offset: 0, rowWidth: target.offsetWidth });
+  };
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStart === null || !swipeState) return;
+    const diff = touchStart - e.touches[0].clientX;
+    if (diff > 0) setSwipeState(s => s ? { ...s, offset: Math.min(diff, s.rowWidth) } : s);
+  };
+  const handleTouchEnd = (groupId: string, itemId: string) => {
+    if (swipeState?.itemId === itemId && swipeState.offset >= swipeState.rowWidth * 0.5)
+      deleteItemDirectly(groupId, itemId);
+    setSwipeState(null); setTouchStart(null);
+  };
+  const handleMouseDown = (e: React.MouseEvent, itemId: string) => {
+    e.preventDefault();
+    const target = e.currentTarget.closest(".swipeable-item") as HTMLElement;
+    if (!target) return;
+    setTouchStart(e.clientX);
+    setSwipeState({ itemId, offset: 0, rowWidth: target.offsetWidth });
+  };
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (touchStart === null || !swipeState) return;
+    const diff = touchStart - e.clientX;
+    if (diff > 0) setSwipeState(s => s ? { ...s, offset: Math.min(diff, s.rowWidth) } : s);
+  };
+  const handleMouseUp = (groupId: string, itemId: string) => {
+    if (swipeState?.itemId === itemId && swipeState.offset >= swipeState.rowWidth * 0.5)
+      deleteItemDirectly(groupId, itemId);
+    setSwipeState(null); setTouchStart(null);
+  };
+
+  const swipeStyle = (itemId: string) => ({
+    transform:  swipeState?.itemId === itemId ? `translateX(-${swipeState.offset}px)` : "translateX(0)",
+    transition: swipeState?.itemId === itemId ? "none" : "transform 0.2s ease-out",
+  });
+
+  // ---- CRUD -----------------------------------------------------------
+  const deleteItemDirectly = async (groupId: string, itemId: string) => {
+    try {
+      await deleteItem(itemId);
+      setGroups(prev =>
+        prev
+          .map(g => g.id === groupId ? { ...g, items: g.items.filter(i => i.id !== itemId) } : g)
+          .filter(g => g.items.length > 0)
+      );
+    } catch {
+      alert("Failed to delete item.");
+    }
+  };
+
+  const handleAddItem = async () => {
+    if (!newGroup.trim() || !newName.trim()) return;
+    try {
+      const existingGroup = groups.find(g => g.groupName.toLowerCase() === newGroup.trim().toLowerCase());
+      if (existingGroup) {
+        const item = await addItem(existingGroup.id, newName.trim(), newExpiry || null);
+        setGroups(prev => prev.map(g => g.id === existingGroup.id ? { ...g, items: [...g.items, item] } : g));
+      } else {
+        const group = await createGroup(newGroup.trim());
+        const item = await addItem(group.id, newName.trim(), newExpiry || null);
+        setGroups(prev => [...prev, { ...group, items: [item] }]);
+      }
+      setNewGroup(""); setNewName(""); setNewExpiry(""); setAddOpen(false);
+    } catch {
+      alert("Failed to add item.");
+    }
+  };
+
+  const handleAddToGroup = async () => {
+    if (!atgTarget) return;
+    const group = groups.find(g => g.id === atgTarget);
+    if (!group) return;
+    try {
+      const item = await addItem(
+        group.id,
+        `${group.groupName} – Item ${group.items.length + 1}`,
+        atgExpiry || null
+      );
+      setGroups(prev => prev.map(g => g.id === atgTarget ? { ...g, items: [...g.items, item] } : g));
+      setAtgExpiry(""); setAtgOpen(false);
+    } catch {
+      alert("Failed to add item.");
+    }
+  };
+
+  const openEdit = (groupId: string, item: Item) => {
+    setEditTarget({ groupId, item });
+    setEditName(item.name);
+    setEditExpiry(item.ablaufdatum ?? "");
+    setEditOpen(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editTarget || !editName.trim()) return;
+    try {
+      const updated = await updateItem(editTarget.item.id, editName.trim(), editExpiry || null);
+      setGroups(prev => prev.map(g =>
+        g.id === editTarget.groupId
+          ? { ...g, items: g.items.map(i => i.id === updated.id ? updated : i) }
+          : g
+      ));
+      setEditOpen(false);
+    } catch {
+      alert("Failed to save changes.");
+    }
+  };
+
+  const openDelete = (groupId: string, itemId: string) => {
+    setDeleteTarget({ groupId, itemId }); setDeleteOpen(true);
+  };
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await deleteItem(deleteTarget.itemId);
+      setGroups(prev =>
+        prev
+          .map(g => g.id === deleteTarget.groupId ? { ...g, items: g.items.filter(i => i.id !== deleteTarget.itemId) } : g)
+          .filter(g => g.items.length > 0)
+      );
+      setDeleteOpen(false);
+    } catch {
+      alert("Failed to delete item.");
+    }
+  };
+
+  // ---- Derived data ---------------------------------------------------
+  const isSearching = search.trim() !== "" || activeFilters.length > 0;
+
+  const searchResults = useMemo(() => {
+    const q = search.toLowerCase();
+    const results: Array<{ item: Item; groupName: string; groupId: string }> = [];
+    groups.forEach(group =>
+      group.items.forEach(item => {
+        const s = itemStatus(item);
+        const matchText   = !q || item.name.toLowerCase().includes(q) || group.groupName.toLowerCase().includes(q);
+        const matchFilter = activeFilters.length === 0 || activeFilters.includes(s);
+        if (matchText && matchFilter) results.push({ item, groupName: group.groupName, groupId: group.id });
+      })
+    );
+    return results;
+  }, [search, groups, activeFilters]);
+
+  // ---- Style helpers --------------------------------------------------
+  const filterBtnClass = (id: string, color: string) => {
+    const base   = "px-3 py-1 rounded-full text-sm transition-colors border-0 cursor-pointer";
+    const active = activeFilters.includes(id);
+    const map: Record<string, string> = {
+      red:    active ? "bg-red-600 text-white"    : "bg-red-100 text-red-700 hover:bg-red-200",
+      yellow: active ? "bg-yellow-500 text-white" : "bg-yellow-100 text-yellow-700 hover:bg-yellow-200",
+      green:  active ? "bg-green-600 text-white"  : "bg-green-100 text-green-700 hover:bg-green-200",
+      gray:   active ? "bg-gray-600 text-white"   : "bg-gray-100 text-gray-700 hover:bg-gray-200",
+    };
+    return `${base} ${map[color]}`;
+  };
+
+  const itemDateInfo = (item: Item) => {
+    const s = itemStatus(item);
+    const cls    = s === "expired" ? "text-red-600 font-medium" : s === "expiring" ? "text-yellow-600 font-medium" : "text-gray-500";
+    const suffix = s === "expired" ? " (Expired)" : s === "expiring" ? " (Expiring Soon)" : "";
+    const label  = item.ablaufdatum
+      ? format(new Date(item.ablaufdatum + "T00:00:00"), "MMM dd, yyyy") + suffix
+      : "Not set";
+    return { cls, label, s };
+  };
+
+  // ---- Show nothing while checking for an existing session ---------
+  if (checkingAuth) return null;
+  // ---- Login Screen ---------------------------------------------------
+  if (!session) return <LoginScreen error={authError ?? undefined}/>;
+
+  // ---- Render ---------------------------------------------------------
+  return (
+    <div className="size-full flex flex-col bg-gray-50">
+      {/* ── Navbar ── */}
+      <nav className="bg-white shadow-sm border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <h2 className="text-gray-900">Inventar</h2>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500">{session?.user.email}</span>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <button className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                    <Settings className="w-5 h-5" />
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content className="min-w-[170px] bg-white rounded-xl shadow-lg border border-gray-200 p-1 z-50">
+                    <DropdownMenu.Item className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg cursor-pointer outline-none">
+                      <SlidersHorizontal className="w-4 h-4" /> Settings
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg cursor-pointer outline-none">
+                      <Download className="w-4 h-4" /> Export data
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator className="h-px bg-gray-200 my-1" />
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg cursor-pointer outline-none"
+                      onClick={handleLogout}
+                    >
+                      <LogOut className="w-4 h-4" /> Logout
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* ── Main ── */}
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="w-full max-w-2xl bg-white rounded-lg shadow-lg p-6">
+
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <h1>Inventory List</h1>
+            <button
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              onClick={() => { setNewGroup(""); setNewName(""); setNewExpiry(""); setAddOpen(true); }}
+            >
+              <Plus className="w-4 h-4" /> Add Item
+            </button>
+          </div>
+
+          {/* Search + Filters */}
+          <div className="mb-6 space-y-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search items..."
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {filters.map(f => (
+                <button key={f.id} className={filterBtnClass(f.id, f.color)} onClick={() => toggleFilter(f.id)}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {dataLoading && (
+            <div className="text-center py-8 text-gray-500">Loading inventory...</div>
+          )}
+          {dataError && (
+            <div className="text-center py-8 text-red-500">{dataError}</div>
+          )}
+
+          {/* ── Search/filter mode: flat list ── */}
+          {!dataLoading && !dataError && (isSearching ? (
+            <div className="space-y-2">
+              {searchResults.length > 0 ? searchResults.map(({ item, groupName, groupId }) => {
+                const { cls, label, s } = itemDateInfo(item);
+                const border = s === "expired" ? "border-red-400" : s === "expiring" ? "border-yellow-400" : "border-gray-200";
+                const bg     = s === "expired" ? "bg-red-50"     : s === "expiring" ? "bg-yellow-50"     : "bg-white";
+                return (
+                  <div key={item.id} className={`relative overflow-hidden rounded border swipeable-item ${border}`}>
+                    <div className="absolute inset-0 bg-red-600 flex items-center justify-end px-6">
+                      <Trash2 className="w-5 h-5 text-white" />
+                    </div>
+                    <div
+                      className={`flex items-center justify-between p-3 relative ${bg}`}
+                      style={swipeStyle(item.id)}
+                      onTouchMove={swipeState?.itemId === item.id ? handleTouchMove : undefined}
+                      onTouchEnd={swipeState?.itemId === item.id ? () => handleTouchEnd(groupId, item.id) : undefined}
+                      onMouseMove={swipeState?.itemId === item.id ? handleMouseMove : undefined}
+                      onMouseUp={swipeState?.itemId === item.id ? () => handleMouseUp(groupId, item.id) : undefined}
+                      onMouseLeave={() => { if (swipeState?.itemId === item.id) handleMouseUp(groupId, item.id); }}
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-gray-900">{item.name}</span>
+                        <span className="text-xs text-gray-500">Group: {groupName}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className={`text-sm ${cls}`}>{label}</span>
+                        <button onClick={() => openEdit(groupId, item)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors">
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={e => { e.stopPropagation(); openDelete(groupId, item.id); }}
+                          onTouchStart={e => handleTouchStart(e, item.id)}
+                          onMouseDown={e => handleMouseDown(e, item.id)}
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer select-none"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }) : (
+                <div className="text-center py-8 text-gray-500">No items found matching your criteria</div>
+              )}
+            </div>
+          ) : (
+            /* ── Default: grouped accordion ── */
+            <Accordion.Root type="multiple" className="space-y-3">
+              {groups.map(group => {
+                const gs  = groupStatus(group);
+                const exp = earliestExpiry(group);
+                const subText     = exp ? `Expires: ${format(new Date(exp + "T00:00:00"), "MMM dd, yyyy")}` : "No expiry dates set";
+                const groupBorder = gs === "expired" ? "border-red-400 bg-red-50/50" : gs === "expiring" ? "border-yellow-400 bg-yellow-50/50" : "border-gray-200";
+                const headerBg    = gs === "expired" ? "bg-red-50 hover:bg-red-100"  : gs === "expiring" ? "bg-yellow-50 hover:bg-yellow-100"  : "bg-white hover:bg-gray-50";
+
+                return (
+                  <Accordion.Item key={group.id} value={group.id} className={`border rounded-lg overflow-hidden ${groupBorder}`}>
+                    <Accordion.Trigger className={`w-full flex items-center justify-between p-4 transition-colors group ${headerBg}`}>
+                      <div className="flex items-center gap-4">
+                        <div className="flex flex-col items-start">
+                          <span className="font-medium text-gray-900">{group.groupName}</span>
+                          <span className="text-sm text-gray-500">{subText}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={e => { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgOpen(true); }}
+                          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgOpen(true); } }}
+                          className="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors cursor-pointer"
+                        >
+                          <Plus className="w-4 h-4" />
+                        </div>
+                        <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full font-medium">
+                          {group.items.length}
+                        </span>
+                        <ChevronDown className="w-5 h-5 text-gray-400 transition-transform group-data-[state=open]:rotate-180" />
+                      </div>
+                    </Accordion.Trigger>
+
+                    <Accordion.Content className="overflow-hidden data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up">
+                      <div className="bg-gray-50 p-4 border-t border-gray-200">
+                        <div className="space-y-2">
+                          {group.items.map(item => {
+                            const { cls, label } = itemDateInfo(item);
+                            return (
+                              <div key={item.id} className="relative overflow-hidden rounded border border-gray-200 swipeable-item">
+                                <div className="absolute inset-0 bg-red-600 flex items-center justify-end px-6">
+                                  <Trash2 className="w-5 h-5 text-white" />
+                                </div>
+                                <div
+                                  className="flex items-center justify-between p-3 bg-white relative"
+                                  style={swipeStyle(item.id)}
+                                  onTouchMove={swipeState?.itemId === item.id ? handleTouchMove : undefined}
+                                  onTouchEnd={swipeState?.itemId === item.id ? () => handleTouchEnd(group.id, item.id) : undefined}
+                                  onMouseMove={swipeState?.itemId === item.id ? handleMouseMove : undefined}
+                                  onMouseUp={swipeState?.itemId === item.id ? () => handleMouseUp(group.id, item.id) : undefined}
+                                  onMouseLeave={() => { if (swipeState?.itemId === item.id) handleMouseUp(group.id, item.id); }}
+                                >
+                                  <span className="text-gray-900">{item.name}</span>
+                                  <div className="flex items-center gap-3">
+                                    <span className={`text-sm ${cls}`}>{label}</span>
+                                    <button onClick={() => openEdit(group.id, item)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors">
+                                      <Edit className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={e => { e.stopPropagation(); openDelete(group.id, item.id); }}
+                                      onTouchStart={e => handleTouchStart(e, item.id)}
+                                      onMouseDown={e => handleMouseDown(e, item.id)}
+                                      className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer select-none"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </Accordion.Content>
+                  </Accordion.Item>
+                );
+              })}
+            </Accordion.Root>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Add Item dialog ── */}
+      <Dialog.Root open={addOpen} onOpenChange={setAddOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
+            <div className="flex items-center justify-between mb-4">
+              <Dialog.Title className="font-medium text-gray-900">Add New Item</Dialog.Title>
+              <Dialog.Close asChild><button className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button></Dialog.Close>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block mb-2 text-sm text-gray-700">Group Name</label>
+                <input type="text" value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="e.g., Milk, Eggs, Bread" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block mb-2 text-sm text-gray-700">Item Name</label>
+                <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g., Milk – Carton 1" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
+                <input type="date" value={newExpiry} onChange={e => setNewExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <button onClick={handleAddItem} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Add Item</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* ── Add to Group dialog ── */}
+      <Dialog.Root open={atgOpen} onOpenChange={setAtgOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
+            <div className="flex items-center justify-between mb-4">
+              <Dialog.Title className="font-medium text-gray-900">Add Item to Group</Dialog.Title>
+              <Dialog.Close asChild><button className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button></Dialog.Close>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
+                <input type="date" value={atgExpiry} onChange={e => setAtgExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <button onClick={handleAddToGroup} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">Add Item</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* ── Edit dialog ── */}
+      <Dialog.Root open={editOpen} onOpenChange={setEditOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
+            <div className="flex items-center justify-between mb-4">
+              <Dialog.Title className="font-medium text-gray-900">Edit Item</Dialog.Title>
+              <Dialog.Close asChild><button className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button></Dialog.Close>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block mb-2 text-sm text-gray-700">Item Name</label>
+                <input type="text" value={editName} onChange={e => setEditName(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
+                <input type="date" value={editExpiry} onChange={e => setEditExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <button onClick={handleSaveEdit} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Save Changes</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* ── Delete confirm ── */}
+      <AlertDialog.Root open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <AlertDialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
+            <AlertDialog.Title className="font-medium text-gray-900 mb-2">Delete Item</AlertDialog.Title>
+            <AlertDialog.Description className="text-sm text-gray-600 mb-6">
+              Are you sure you want to delete this item? This action cannot be undone.
+            </AlertDialog.Description>
+            <div className="flex justify-end gap-3">
+              <AlertDialog.Cancel asChild>
+                <button className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+              </AlertDialog.Cancel>
+              <AlertDialog.Action asChild>
+                <button onClick={handleDelete} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">Delete</button>
+              </AlertDialog.Action>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
+    </div>
+  );
+}
