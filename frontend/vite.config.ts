@@ -13,7 +13,7 @@ export default defineConfig({
       'delicious-overheat-headway.ngrok-free.dev',
       '192.168.1.193',
       '192.168.1.73',
-      'localhost',
+      'localhost',  
     ],
     proxy: {
       // Proxy API calls to the FastAPI backend during development
