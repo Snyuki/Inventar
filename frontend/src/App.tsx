@@ -725,6 +725,13 @@ export default function App() {
           </AlertDialog.Content>
         </AlertDialog.Portal>
       </AlertDialog.Root>
+
+      {/* ── Footer ── */}
+      <footer className="text-center py-3 text-xs text-gray-400 border-t border-gray-100 bg-white">
+        <span>© {new Date().getFullYear()} Snyuki</span>
+        <span className="mx-2">·</span>
+        <span>v{__APP_VERSION__}</span>
+      </footer>
     </div>
   );
 }
