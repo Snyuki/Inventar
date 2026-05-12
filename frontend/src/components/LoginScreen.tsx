@@ -14,6 +14,7 @@ export default function LoginScreen({ error: externalError }: Props) {
   }, [externalError]);
 
   const handleGoogleLogin = async () => {
+  console.log("Redirecting to:", window.location.origin);
     setLoading(true);
     setError("")
     const { error } = await supabase.auth.signInWithOAuth({

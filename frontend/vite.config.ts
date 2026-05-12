@@ -10,7 +10,12 @@ export default defineConfig({
   },
   server: {
     host: true,
-    allowedHosts: ['delicious-overheat-headway.ngrok-free.dev'],
+    allowedHosts: [
+      'delicious-overheat-headway.ngrok-free.dev',
+      '192.168.1.193',
+      '192.168.1.73',
+      'localhost',
+    ],
     proxy: {
       // Proxy API calls to the FastAPI backend during development
       "/api": "http://localhost:8000",

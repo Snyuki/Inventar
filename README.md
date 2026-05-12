@@ -43,6 +43,7 @@ Live at: **[inventar-frontend-iota.vercel.app](https://inventar-frontend-iota.ve
 ```
 
 This starts the backend, frontend, and ngrok tunnel simultaneously.
+Dev will be hosted at: **[https://delicious-overheat-headway.ngrok-free.dev/](https://delicious-overheat-headway.ngrok-free.dev/)** (or any ngrok url you use)
 
 ### Manual Setup
 
