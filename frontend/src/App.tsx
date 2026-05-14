@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import * as Accordion from "@radix-ui/react-accordion";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
@@ -337,6 +337,12 @@ export default function App() {
 
   function CountPicker({ value, onChange }: { value: number; onChange: (n: number) => void }) {
     const counts = Array.from({ length: 20 }, (_, i) => i + 1);
+    const selectedRef = useRef<HTMLButtonElement>(null);
+
+    useEffect(() => {
+      selectedRef.current?.scrollIntoView({ behavior: "instant", block: "nearest", inline: "center" });
+    }, [value]);
+
     return (
       <div>
         <label className="block mb-2 text-sm text-gray-700">Anzahl</label>
@@ -344,6 +350,7 @@ export default function App() {
           {counts.map(n => (
             <button
               key={n}
+              ref={n === value ? selectedRef : null}
               type="button"
               onClick={() => onChange(n)}
               className={`flex-shrink-0 w-10 h-10 rounded-lg text-sm font-medium snap-start transition-colors
