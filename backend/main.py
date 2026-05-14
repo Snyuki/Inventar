@@ -155,6 +155,9 @@ class GroupOut(BaseModel):
 class GroupIn(BaseModel):
     group_name: str
 
+class GroupUpdate(BaseModel):
+    group_name: str
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -199,6 +202,27 @@ async def create_group(body: GroupIn, user: str = Depends(get_current_user)):
         id=gid, group_name=body.group_name
     ))
     return GroupOut(id=gid, group_name=body.group_name, items=[])
+
+
+@app.put("/api/groups/{group_id}")
+async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get_current_user)):
+    g = await database.fetch_one(
+        groups_table.select().where(
+            (groups_table.c.id == group_id)
+        )
+    )
+    if not g:
+        raise HTTPException(404, "Group not found")
+    
+    await database.execute(
+        groups_table.update().where(groups_table.c.id == group_id).values(group_name=body.group_name)
+    )
+
+    item_rows = await database.fetch_all(items_table.select().where(items_table.c.id == group_id))
+    return GroupOut(id=group_id, group_name=body.group_name, items=[
+        ItemOut(id=i["id"], name=i["name"], kaufdatum=i["kaufdatum"], ablaufdatum=i["ablaufdatum"])
+        for i in item_rows
+    ])
 
 
 @app.post("/api/groups/{group_id}/items", response_model=ItemOut, status_code=201)

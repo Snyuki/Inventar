@@ -14,6 +14,13 @@ async function headers() {
     };
 }
 
+/*
+* Does the error handling
+* 
+* Parameters: Response
+* Returns: Content depending on response
+* Throws: Error if Response is an Error
+*/
 async function handleResponse(res: Response): Promise<any> {
     if (!res.ok) {
         let message = `Request fehlgeschlafen (${res.status})`;
@@ -71,6 +78,18 @@ export async function fetchGroups(): Promise<ItemGroup[]> {
             ablaufdatum: i.ablaufdatum ?? null,
         })),
     }));
+}
+
+export async function updateGroup(groupId: string, groupName: string): Promise<ItemGroup> {
+    const res = await fetch(`${BASE_URL}/groups/${groupId}`, {
+        method: "PUT",
+        headers: await headers(),
+        body: JSON.stringify({ group_name: groupName}),
+    });
+    const g = await handleResponse(res);
+    return { id: g.id, groupName: g.group_name, items: g.items.map((i: any) => ({
+        id: i.id, name: i.name, kaufdatum: i.kaufdatum, ablaufdatum: i.expiry_date ?? null,
+    }))};
 }
 
 export async function addItem(
