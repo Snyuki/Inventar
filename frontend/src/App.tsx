@@ -67,6 +67,7 @@ export default function App() {
   const [atgExpiry,  setAtgExpiry]  = useState("");
   const [newCount,  setNewCount]    = useState(1);
   const [atgCount,  setAtgCount]    = useState(1);
+  const [atgName, setAtgName]       = useState("");
 
   // UI state
   const [search,        setSearch]        = useState("");
@@ -209,7 +210,13 @@ export default function App() {
         }
         return [...prev, { ...targetGroup, items: newItems }];
       });
-      setNewGroup(""); setNewName(""); setNewExpiry(""); setNewCount(1); setAddOpen(false);
+
+      setNewGroup("");
+      setNewName("");
+      setNewExpiry("");
+      setNewCount(1);
+      setAddOpen(false);
+
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Failed to add item.");
     }
@@ -223,11 +230,16 @@ export default function App() {
     try {
       const newItems = await Promise.all(
         Array.from({ length: atgCount }, (_, i) =>
-          addItem(group.id, `${group.groupName}`, atgExpiry || null)
+          addItem(group.id, atgName.trim() || group.groupName, atgExpiry || null)
         )
       );
       setGroups(prev => prev.map(g => g.id === atgTarget ? { ...g, items: [...g.items, ...newItems] } : g));
-      setAtgExpiry(""); setAtgCount(1); setAtgOpen(false);
+      
+      setAtgExpiry("");
+      setAtgName("");
+      setAtgCount(1);
+      setAtgOpen(false);
+
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Failed to add item.");
     }
@@ -559,8 +571,8 @@ export default function App() {
                         <div
                           role="button"
                           tabIndex={0}
-                          onClick={e => { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgOpen(true); }}
-                          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgOpen(true); } }}
+                          onClick={e => { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); }}
+                          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); } }}
                           className="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors cursor-pointer"
                         >
                           <Plus className="w-4 h-4" />
@@ -659,7 +671,7 @@ export default function App() {
       </Dialog.Root>
 
       {/* ── Add to Group dialog ── */}
-      <Dialog.Root open={atgOpen} onOpenChange={(open) => { setAtgOpen(open); if (!open) setFormError(null); setAtgCount(1); }}>
+      <Dialog.Root open={atgOpen} onOpenChange={(open) => { setAtgOpen(open); if (!open) setFormError(null); setAtgCount(1); setAtgName(""); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -668,6 +680,16 @@ export default function App() {
               <Dialog.Close asChild><button className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button></Dialog.Close>
             </div>
             <div className="space-y-4">
+            <div>
+              <label className="block mb-2 text-sm text-gray-700">Item Name</label>
+              <input
+                type="text"
+                value={atgName}
+                onChange={e => setAtgName(e.target.value)}
+                placeholder={`e.g. ${atgTarget ? groups.find(g => g.id === atgTarget)?.groupName : ""}`}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
               <div>
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
                 <input type="date" value={atgExpiry} onChange={e => setAtgExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
