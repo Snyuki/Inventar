@@ -470,7 +470,7 @@ export default function App() {
       </nav>
 
       {/* ── Main ── */}
-      <div className="flex-1 flex items-center justify-center p-8">
+      <div className="flex-1 flex items-start justify-center p-8">
         <div className="w-full max-w-2xl bg-white rounded-lg shadow-lg p-6">
 
           {/* Header */}
