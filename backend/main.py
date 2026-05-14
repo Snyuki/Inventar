@@ -244,6 +244,17 @@ async def create_item(group_id: str, body: ItemIn, user: str = Depends(get_curre
     return ItemOut(id=iid, name=body.name, kaufdatum=kauf, ablaufdatum=body.ablaufdatum)
 
 
+@app.get("/api/group-templates")
+async def list_group_templates(user: str = Depends(get_current_user)):
+    """
+    Return all available group template names in insertion order.
+    """
+    rows = await database.fetch_all(
+        "SELECT group_name FROM group_templates ORDER BY ctid"
+    )
+    return [row["group_name"] for row in rows]
+
+
 @app.put("/api/items/{item_id}", response_model=ItemOut)
 async def update_item(item_id: str, body: ItemIn, user: str = Depends(get_current_user)):
     row = await database.fetch_one(
@@ -276,6 +287,22 @@ async def delete_item(item_id: str, user: str = Depends(get_current_user)):
     )
     if not remaining:
         await database.execute(groups_table.delete().where(groups_table.c.id == row["group_id"]))
+
+
+@app.get("/api/items/suggestions")
+async def item_suggestions(q: str = "", user: str = Depends(get_current_user)):
+    """
+    Return distinct item names matching the query with their group name.
+    """
+    rows = await database.fetch_all("""
+        SELECT DISTINCT i.name, g.group_name
+        FROM items i
+        JOIN item_groups g ON i.group_id = g.id
+        WHERE LOWER(i.name) LIKE LOWER(:pattern)
+        ORDER BY i.name
+        LIMIT 10
+    """, values={"pattern": f"%{q}%"})
+    return [{"name": row["name"], "groupName": row["group_name"]} for row in rows]
 
 
 # ---------------------------------------------------------------------------

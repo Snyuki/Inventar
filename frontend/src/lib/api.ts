@@ -92,6 +92,13 @@ export async function updateGroup(groupId: string, groupName: string): Promise<I
     }))};
 }
 
+export async function fetchGroupTemplates(): Promise<string[]> {
+    const res = await fetch(`${BASE_URL}/group-templates`, {
+        headers: await headers(),
+    });
+    return handleResponse(res);
+}
+
 export async function addItem(
     groupId: string,
     name: string,
@@ -131,4 +138,11 @@ export async function deleteItem(itemId: string): Promise<void> {
     headers: await headers(),
   });
   await handleResponse(res);
+}
+
+export async function fetchItemSuggestions(query: string): Promise<Array<{ name: string; groupName: string }>> {
+    const res = await fetch(`${BASE_URL}/items/suggestions?q=${encodeURIComponent(query)}`, {
+        headers: await headers(),
+    });
+    return handleResponse(res);
 }
