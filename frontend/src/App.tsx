@@ -45,10 +45,8 @@ export default function App() {
   // Data
   const [groups, setGroups]                 = useState<ItemGroup[]>([]);
   const [groupTemplates, setGroupTemplates] = useState<string[]>([]);
-  const [dataLoading, setDataLoading]       = useState(false);
   const [dataError, setDataError]           = useState<string | null>(null);
   const [formError, setFormError]           = useState<string | null>(null);
-  const [deleteLoading, setDeleteLoading]   = useState(false); 
 
   // Dialogs
   const [addOpen,      setAddOpen]                = useState(false);
@@ -60,6 +58,9 @@ export default function App() {
   const [deleteTarget, setDeleteTarget]           = useState<DeleteTarget>(null);
   const [atgTarget,    setAtgTarget]              = useState<ATGTarget>(null);
   const [renameGroupTarget, setRenameGroupTarget] = useState<{ id: string; name: string } | null>(null);
+  const [dataLoading, setDataLoading]             = useState(false);
+  const [deleteLoading, setDeleteLoading]         = useState(false);
+  const [insertItemLoading, setInsertItemLoading] = useState(false); 
 
   // Form fields
   const [newGroup,   setNewGroup]             = useState("");
@@ -235,32 +236,43 @@ export default function App() {
   const handleAddItem = async () => {
     if (!newGroup.trim() || !newName.trim()) return;
     setFormError(null);
+    setInsertItemLoading(true);
     try {
       const existingGroup = groups.find(g => g.groupName.toLowerCase() === newGroup.trim().toLowerCase());
-      const targetGroup = existingGroup ?? await createGroup(newGroup.trim());
       
-      const newItems = await Promise.all(
-        Array.from({ length: newCount }, () =>
-          addItem(targetGroup.id, newName.trim(), newExpiry || null)
-        )
-      );
-
-      setGroups(prev => {
-        const exists = prev.find(g => g.id === targetGroup.id);
-        if (exists) {
-          return prev.map(g => g.id === targetGroup.id ? { ...g, items: [...g.items, ...newItems] } : g);
+      if (existingGroup) {
+        // Promise.all gives race conditions so generic loop
+        const newItems: Item[] = [];
+        for (let i = 0; i < newCount; i++) {
+          const item = await addItem(existingGroup.id, newName.trim(), newExpiry || null);
+          newItems.push(item);
         }
-        return [...prev, { ...targetGroup, items: newItems }];
-      });
+        setGroups(prev => prev.map(g => g.id === existingGroup.id ? { ...g, items: [...g.items, ...newItems] } : g));
+      } else {
+        const group = await createGroup(newGroup.trim());   // Note: This is the active groups; not the templates
+        const newItems: Item[] = [];
+        for (let i = 0; i < newCount; i++) {
+          const item = await addItem(group.id, newName.trim(), newExpiry || null);
+          newItems.push(item);
+        }
+        setGroups(prev => [...prev, { ...group, items: newItems }]);
+      }
 
       setNewGroup("");
       setNewName("");
       setNewExpiry("");
       setNewCount(1);
       setAddOpen(false);
-
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Failed to add item.");
+    } catch (e: any) {
+      if (e.status === 409 && e.detail?.correct_group_name) {
+        // Auto switch group name and inform the user
+        setNewGroup(e.detail.correct_group_name)
+        setFormError(`"${newName.trim()}" gehört zur Gruppe "${e.detail.correct_group_name}". Gruppe wurde automatisch angepasst — bitte erneut bestätigen.`)
+      } else {
+        setFormError(e instanceof Error ? e.message : "Failed to add item.");
+      }
+    } finally {
+      setInsertItemLoading(false);
     }
   };
 
@@ -317,8 +329,12 @@ export default function App() {
           : g
       ));
       setEditOpen(false);
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Failed to save changes.");
+    } catch (e: any) {
+      if (e.status === 409 && e.detail?.correct_group_name) {
+        setFormError(`"${editName.trim()}" gehört bereits zur Gruppe "${e.detail.correct_group_name}". Umbenennung nicht möglich.`);
+      } else {
+        setFormError(e instanceof Error ? e.message : "Failed to save changes.");
+      }
     }
   };
 
@@ -761,7 +777,13 @@ export default function App() {
               {formError && (
                 <p className="text-sm text-red-600">{formError}</p>
               )}
-              <button onClick={handleAddItem} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Add Item</button>
+              <button
+                onClick={handleAddItem}
+                disabled={insertItemLoading || !newGroup.trim() || !newName.trim()}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {insertItemLoading ? "Wird hinzugefügt..." : "Add Item"}
+              </button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

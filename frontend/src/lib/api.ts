@@ -26,14 +26,20 @@ async function handleResponse(res: Response): Promise<any> {
         let message = `Request fehlgeschlafen (${res.status})`;
         try {
             const body = await res.json();
+            
+            // Throw structured error in case of 409
+            if (res.status === 409) {
+                throw { status: 409, detail: body.detail };
+            }
+
             // Handle Fastapi validation errors
             if (typeof body.detail === "string") {
                 message = body.detail;
             } else if (Array.isArray(body.detail)) {
                 message = body.detail.map((e: any) => e.msg).join(", ");
             }
-        } catch {
-            throw new Error("Errorhandling failed.");
+        } catch (e: any) {
+            if (e.status === 409) throw e;      // Rethrow 409 conflict error again
         }
         throw new Error(message);
     }

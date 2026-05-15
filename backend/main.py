@@ -4,6 +4,7 @@ from typing import Optional
 import os
 import uuid
 import re
+from datetime import datetime, timezone, timedelta
  
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status
@@ -16,6 +17,8 @@ import sqlalchemy
 from pydantic import BaseModel, field_validator
 
 from dotenv import load_dotenv
+
+import constants
 
 load_dotenv()
 
@@ -39,9 +42,18 @@ items_table = sqlalchemy.Table(
     metadata,
     sqlalchemy.Column("id",          sqlalchemy.String, primary_key=True),
     sqlalchemy.Column("group_id",    sqlalchemy.String, sqlalchemy.ForeignKey("item_groups.id"), nullable=False),
-    sqlalchemy.Column("name",        sqlalchemy.String, nullable=False),
     sqlalchemy.Column("kaufdatum",   sqlalchemy.String, nullable=False),  # ISO date
     sqlalchemy.Column("ablaufdatum", sqlalchemy.String, nullable=True),   # ISO date or NULL
+    sqlalchemy.Column("name_to_group_id", sqlalchemy.String, sqlalchemy.ForeignKey("item_name_to_group_registry.id"), nullable=True),
+)
+
+item_name_registry_table = sqlalchemy.Table(
+    "item_name_to_group_registry",
+    metadata,
+    sqlalchemy.Column("id",         sqlalchemy.String, primary_key=True),
+    sqlalchemy.Column("item_name",  sqlalchemy.String, nullable=False, unique=True),
+    sqlalchemy.Column("group_id",   sqlalchemy.String, sqlalchemy.ForeignKey("item_groups.id"), nullable=False),
+    sqlalchemy.Column("created_at", sqlalchemy.DateTime(timezone=True), nullable=True),
 )
 
 sync_url = DATABASE_URL.replace("+asyncpg", "")
@@ -179,9 +191,12 @@ async def list_groups(user: str = Depends(get_current_user)):
     )
     result = []
     for g in group_rows:
-        item_rows = await database.fetch_all(
-            items_table.select().where(items_table.c.group_id == g["id"])
-        )
+        item_rows = await database.fetch_all("""
+            SELECT i.id, r.item_name AS name, i.kaufdatum, i.ablaufdatum
+            FROM items i
+            JOIN item_name_to_group_registry r ON i.name_to_group_id = r.id
+            WHERE i.group_id = :group_id
+        """, values={"group_id": g["id"]})
         result.append(GroupOut(
             id=g["id"],
             group_name=g["group_name"],
@@ -218,7 +233,13 @@ async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get
         groups_table.update().where(groups_table.c.id == group_id).values(group_name=body.group_name)
     )
 
-    item_rows = await database.fetch_all(items_table.select().where(items_table.c.id == group_id))
+    item_rows = await database.fetch_all("""
+        SELECT i.id, r.item_name AS name, i.kaufdatum, i.ablaufdatum
+        FROM items i
+        JOIN item_name_to_group_registry r ON i.name_to_group_id = r.id
+        WHERE i.group_id = :group_id
+    """, values={"group_id": group_id})
+
     return GroupOut(id=group_id, group_name=body.group_name, items=[
         ItemOut(id=i["id"], name=i["name"], kaufdatum=i["kaufdatum"], ablaufdatum=i["ablaufdatum"])
         for i in item_rows
@@ -229,17 +250,57 @@ async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get
 async def create_item(group_id: str, body: ItemIn, user: str = Depends(get_current_user)):
     g = await database.fetch_one(
         groups_table.select().where(
-            (groups_table.c.id == group_id)
+            (groups_table.c.id == group_id)     # The 'c' is for 'column'
         )
     )
     if not g:
         raise HTTPException(404, "Group not found")
 
+    # Check if item name already in registry under different group
+    existing = await database.fetch_one(
+        item_name_registry_table.select().where(
+            item_name_registry_table.c.item_name == body.name
+        )
+    )
+
+    if existing and existing["group_id"] != group_id:
+        correct_group = await database.fetch_one(
+            groups_table.select().where(groups_table.c.id == existing["group_id"])
+        )
+        raise HTTPException(409, detail={
+            "message": "Item already registered under a different group",
+            "correct_group_id": existing["group_id"],
+            "correct_group_name": correct_group["group_name"],
+        })
+
+    # Register in registry if not yet done
+    if not existing:
+        reg_id = str(uuid.uuid4())
+
+        # ON CONFLICT DO NOTHING to handle race conditions
+        await database.execute("""
+            INSERT INTO item_name_to_group_registry (id, item_name, group_id)
+            VALUES (:id, :item_name, :group_id)
+            ON CONFLICT (item_name) DO NOTHING
+        """, values={"id": reg_id, "item_name": body.name, "group_id": group_id})
+        
+        # Fetch the actual registry entry -> might have been altered by concurrent request
+        existing = await database.fetch_one(
+            item_name_registry_table.select().where(
+                item_name_registry_table.c.item_name == body.name
+            )
+        )
+        reg_id = existing["id"]
+    else:
+        reg_id = existing["id"]
+
+    
     iid = str(uuid.uuid4())
     kauf = date.today().isoformat()
     await database.execute(items_table.insert().values(
-        id=iid, group_id=group_id, name=body.name,
+        id=iid, group_id=group_id,
         kaufdatum=kauf, ablaufdatum=body.ablaufdatum,
+        name_to_group_id=reg_id,
     ))
     return ItemOut(id=iid, name=body.name, kaufdatum=kauf, ablaufdatum=body.ablaufdatum)
 
@@ -263,11 +324,53 @@ async def update_item(item_id: str, body: ItemIn, user: str = Depends(get_curren
     )
     if not row:
         raise HTTPException(404, "Item not found")
-    await database.execute(
-        items_table.update().where(items_table.c.id == item_id).values(
-            name=body.name, ablaufdatum=body.ablaufdatum
+    
+    current_registry_entry = await database.fetch_one(
+        item_name_registry_table.select().where(
+            item_name_registry_table.c.id == row["name_to_group_id"]
         )
     )
+    current_name = current_registry_entry["item_name"] if current_registry_entry else None
+    
+    # If name changed
+    if body.name != current_name:
+        existing = await database.fetch_one(
+            item_name_registry_table.select().where(
+                item_name_registry_table.c.item_name == body.name
+            )
+        )
+
+        if existing and existing["group_id"] != row["group_id"]:
+            correct_group = await database.fetch_one(
+                groups_table.select().where(
+                    groups_table.c.id == existing["group_id"]
+                )
+            )
+            raise HTTPException(409, detail={
+                "message": "Item already registered under a different group",
+                "correct_group_id": existing["group_id"],
+                "correct_group_name": correct_group["group_name"],
+            })
+        
+        # Update registry if name changed to unknown name
+        if existing:
+            reg_id = existing["id"]
+        else:
+            reg_id = str(uuid.uuid4())
+            await database.execute(item_name_registry_table.insert().values(
+                id=reg_id, item_name=body.name, group_id=row["group_id"]
+            ))
+
+        await database.execute(items_table.update().where(items_table.c.id == item_id).values(
+            name=body.name, ablaufdatum=body.ablaufdatum, name_to_group_id=reg_id
+        ))
+    else:
+        await database.execute(
+            items_table.update().where(items_table.c.id == item_id).values(
+                ablaufdatum=body.ablaufdatum
+            )
+        )
+
     return ItemOut(id=item_id, name=body.name, kaufdatum=row["kaufdatum"], ablaufdatum=body.ablaufdatum)
 
 
@@ -279,13 +382,49 @@ async def delete_item(item_id: str, user: str = Depends(get_current_user)):
     )
     if not row:
         raise HTTPException(404, "Item not found")
+    
+    group_id = row["group_id"]
+    name_to_group_id = row["name_to_group_id"]
+
+    # Delete Item
     await database.execute(items_table.delete().where(items_table.c.id == item_id))
 
+    # Check if group is now empty
+    if name_to_group_id:
+        remaining_with_same_name = await database.fetch_val(
+            "SELECT COUNT(*) FROM items WHERE name_to_group_id = :reg_id",
+            values={"reg_id": name_to_group_id}
+        )
+
+        if remaining_with_same_name == 0:
+            # Check timestamp
+            registry_row = await database.fetch_one(
+                item_name_registry_table.select().where(
+                    item_name_registry_table.c.id == name_to_group_id
+                )
+            )
+            if registry_row and registry_row["created_at"]:
+                age = datetime.now(timezone.utc) - registry_row["created_at"]
+                if age <= timedelta(minutes=constants.REGISTRY_GRACE_PERIOD_MINUTES):
+                    # Within grace period -> delete registry entry aswell
+                    await database.execute(
+                        item_name_registry_table.delete().where(
+                            item_name_registry_table.c.id == name_to_group_id
+                        )
+                    )
+    else:
+        # This should not happen in normal operation (as with every error),
+        # as all items should have a registry link.
+        # -> Log but don't block the deletion to avoid user-facing errors.
+        print(f"Warning: Item {item_id} has no name_to_group_id — possible legacy data.")
+    
+
     # Delete group if it's now empty
-    remaining = await database.fetch_all(
-        items_table.select().where(items_table.c.group_id == row["group_id"])
+    remaining_in_group = await database.fetch_val(
+        "SELECT COUNT(*) FROM items WHERE group_id = :gid",
+        values={"gid": group_id}
     )
-    if not remaining:
+    if remaining_in_group == 0:
         await database.execute(groups_table.delete().where(groups_table.c.id == row["group_id"]))
 
 
@@ -295,14 +434,14 @@ async def item_suggestions(q: str = "", user: str = Depends(get_current_user)):
     Return distinct item names matching the query with their group name.
     """
     rows = await database.fetch_all("""
-        SELECT DISTINCT i.name, g.group_name
-        FROM items i
-        JOIN item_groups g ON i.group_id = g.id
-        WHERE LOWER(i.name) LIKE LOWER(:pattern)
-        ORDER BY i.name
+        SELECT r.item_name, g.group_name
+        FROM item_name_to_group_registry r
+        JOIN item_groups g ON r.group_id = g.id
+        WHERE LOWER(r.item_name) LIKE LOWER(:pattern)
+        ORDER BY r.item_name
         LIMIT 10
     """, values={"pattern": f"%{q}%"})
-    return [{"name": row["name"], "groupName": row["group_name"]} for row in rows]
+    return [{"name": row["item_name"], "groupName": row["group_name"]} for row in rows]
 
 
 # ---------------------------------------------------------------------------
