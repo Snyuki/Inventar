@@ -26,14 +26,20 @@ async function handleResponse(res: Response): Promise<any> {
         let message = `Request fehlgeschlafen (${res.status})`;
         try {
             const body = await res.json();
+            
+            // Throw structured error in case of 409
+            if (res.status === 409) {
+                throw { status: 409, detail: body.detail };
+            }
+
             // Handle Fastapi validation errors
             if (typeof body.detail === "string") {
                 message = body.detail;
             } else if (Array.isArray(body.detail)) {
                 message = body.detail.map((e: any) => e.msg).join(", ");
             }
-        } catch {
-            throw new Error("Errorhandling failed.");
+        } catch (e: any) {
+            if (e.status === 409) throw e;      // Rethrow 409 conflict error again
         }
         throw new Error(message);
     }
@@ -92,6 +98,13 @@ export async function updateGroup(groupId: string, groupName: string): Promise<I
     }))};
 }
 
+export async function fetchGroupTemplates(): Promise<string[]> {
+    const res = await fetch(`${BASE_URL}/group-templates`, {
+        headers: await headers(),
+    });
+    return handleResponse(res);
+}
+
 export async function addItem(
     groupId: string,
     name: string,
@@ -131,4 +144,11 @@ export async function deleteItem(itemId: string): Promise<void> {
     headers: await headers(),
   });
   await handleResponse(res);
+}
+
+export async function fetchItemSuggestions(query: string): Promise<Array<{ name: string; groupName: string }>> {
+    const res = await fetch(`${BASE_URL}/items/suggestions?q=${encodeURIComponent(query)}`, {
+        headers: await headers(),
+    });
+    return handleResponse(res);
 }

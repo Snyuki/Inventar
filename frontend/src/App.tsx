@@ -26,7 +26,7 @@ import {
 } from "./lib/utils";
 import { supabase } from './lib/supabase'
 import { AuthChangeEvent, Session } from '@supabase/supabase-js'
-import { checkWhitelist, fetchGroups, createGroup, addItem, updateItem, deleteItem, updateGroup } from "./lib/api";
+import { checkWhitelist, fetchGroups, createGroup, addItem, updateItem, deleteItem, updateGroup, fetchGroupTemplates, fetchItemSuggestions } from "./lib/api";
 
 
 // -------------------------------------------------------------------
@@ -43,11 +43,10 @@ export default function App() {
   const [authError, setAuthError]       = useState<string | null>(null);
 
   // Data
-  const [groups, setGroups]               = useState<ItemGroup[]>([]);
-  const [dataLoading, setDataLoading]     = useState(false);
-  const [dataError, setDataError]         = useState<string | null>(null);
-  const [formError, setFormError]         = useState<string | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false); 
+  const [groups, setGroups]                 = useState<ItemGroup[]>([]);
+  const [groupTemplates, setGroupTemplates] = useState<string[]>([]);
+  const [dataError, setDataError]           = useState<string | null>(null);
+  const [formError, setFormError]           = useState<string | null>(null);
 
   // Dialogs
   const [addOpen,      setAddOpen]                = useState(false);
@@ -59,6 +58,9 @@ export default function App() {
   const [deleteTarget, setDeleteTarget]           = useState<DeleteTarget>(null);
   const [atgTarget,    setAtgTarget]              = useState<ATGTarget>(null);
   const [renameGroupTarget, setRenameGroupTarget] = useState<{ id: string; name: string } | null>(null);
+  const [dataLoading, setDataLoading]             = useState(false);
+  const [deleteLoading, setDeleteLoading]         = useState(false);
+  const [insertItemLoading, setInsertItemLoading] = useState(false); 
 
   // Form fields
   const [newGroup,   setNewGroup]             = useState("");
@@ -71,6 +73,10 @@ export default function App() {
   const [atgCount,  setAtgCount]              = useState(1);
   const [atgName, setAtgName]                 = useState("");
   const [renameGroupName, setRenameGroupName] = useState("");
+
+  // Autocomplete
+  const [nameSuggestions, setNameSuggestions] = useState<Array<{ name: string; groupName: string }>>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   // UI state
   const [search,        setSearch]        = useState("");
@@ -85,6 +91,7 @@ export default function App() {
   const [touchStart, setTouchStart] = useState<number | null>(null);
 
   // ---- Auth handlers --------------------------------------------------
+  // Handle login and session
   useEffect(() => {
     setCheckingAuth(true);
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event: AuthChangeEvent, session: Session | null) => {
@@ -112,6 +119,13 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Load Group Templates
+  useEffect(() => {
+    if (!session) return;
+    fetchGroupTemplates().then(setGroupTemplates).catch(console.error);
+  }, [session]);
+
+  // Load Inventory
   useEffect(() => {
     if (!session) return;
     setDataLoading(true);
@@ -179,6 +193,32 @@ export default function App() {
     transition: swipeState?.itemId === itemId ? "none" : "transform 0.2s ease-out",
   });
 
+  const handleNewNameChange = async (currentNewName: string) => {
+    setNewName(currentNewName);
+    if (currentNewName.trim().length === 0) {
+      setNameSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    try {
+      const suggestions = await fetchItemSuggestions(currentNewName.trim());
+      setNameSuggestions(suggestions);
+      setShowSuggestions(suggestions.length > 0);
+    } catch (e) {
+      setNameSuggestions([]);
+      setShowSuggestions(false);
+      console.log("Couldnt set Suggestions: ", e);
+    }
+  }
+
+  const handleSuggestionSelect = (suggestion: { name: string; groupName: string }) => {
+    setNewName(suggestion.name);
+    setNewGroup(suggestion.groupName);
+    setNameSuggestions([]);
+    setShowSuggestions(false);
+  }
+
   // ---- CRUD -----------------------------------------------------------
   const deleteItemDirectly = async (groupId: string, itemId: string) => {
     try {
@@ -196,32 +236,43 @@ export default function App() {
   const handleAddItem = async () => {
     if (!newGroup.trim() || !newName.trim()) return;
     setFormError(null);
+    setInsertItemLoading(true);
     try {
       const existingGroup = groups.find(g => g.groupName.toLowerCase() === newGroup.trim().toLowerCase());
-      const targetGroup = existingGroup ?? await createGroup(newGroup.trim());
       
-      const newItems = await Promise.all(
-        Array.from({ length: newCount }, () =>
-          addItem(targetGroup.id, newName.trim(), newExpiry || null)
-        )
-      );
-
-      setGroups(prev => {
-        const exists = prev.find(g => g.id === targetGroup.id);
-        if (exists) {
-          return prev.map(g => g.id === targetGroup.id ? { ...g, items: [...g.items, ...newItems] } : g);
+      if (existingGroup) {
+        // Promise.all gives race conditions so generic loop
+        const newItems: Item[] = [];
+        for (let i = 0; i < newCount; i++) {
+          const item = await addItem(existingGroup.id, newName.trim(), newExpiry || null);
+          newItems.push(item);
         }
-        return [...prev, { ...targetGroup, items: newItems }];
-      });
+        setGroups(prev => prev.map(g => g.id === existingGroup.id ? { ...g, items: [...g.items, ...newItems] } : g));
+      } else {
+        const group = await createGroup(newGroup.trim());   // Note: This is the active groups; not the templates
+        const newItems: Item[] = [];
+        for (let i = 0; i < newCount; i++) {
+          const item = await addItem(group.id, newName.trim(), newExpiry || null);
+          newItems.push(item);
+        }
+        setGroups(prev => [...prev, { ...group, items: newItems }]);
+      }
 
       setNewGroup("");
       setNewName("");
       setNewExpiry("");
       setNewCount(1);
       setAddOpen(false);
-
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Failed to add item.");
+    } catch (e: any) {
+      if (e.status === 409 && e.detail?.correct_group_name) {
+        // Auto switch group name and inform the user
+        setNewGroup(e.detail.correct_group_name)
+        setFormError(`"${newName.trim()}" gehört zur Gruppe "${e.detail.correct_group_name}". Gruppe wurde automatisch angepasst — bitte erneut bestätigen.`)
+      } else {
+        setFormError(e instanceof Error ? e.message : "Failed to add item.");
+      }
+    } finally {
+      setInsertItemLoading(false);
     }
   };
 
@@ -278,8 +329,12 @@ export default function App() {
           : g
       ));
       setEditOpen(false);
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Failed to save changes.");
+    } catch (e: any) {
+      if (e.status === 409 && e.detail?.correct_group_name) {
+        setFormError(`"${editName.trim()}" gehört bereits zur Gruppe "${e.detail.correct_group_name}". Umbenennung nicht möglich.`);
+      } else {
+        setFormError(e instanceof Error ? e.message : "Failed to save changes.");
+      }
     }
   };
 
@@ -665,7 +720,7 @@ export default function App() {
       </div>
 
       {/* ── Add Item dialog ── */}
-      <Dialog.Root open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) setFormError(null); setNewCount(1); }}>
+      <Dialog.Root open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) setFormError(null); setNewCount(1); setNameSuggestions([]); setShowSuggestions(false); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -674,13 +729,45 @@ export default function App() {
               <Dialog.Close asChild><button className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button></Dialog.Close>
             </div>
             <div className="space-y-4">
-              <div>
-                <label className="block mb-2 text-sm text-gray-700">Group Name</label>
-                <input type="text" value={newGroup} onChange={e => { setNewGroup(e.target.value); setNewName(e.target.value); } } placeholder="e.g., Milk, Eggs, Bread" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <div className="relative">
+                <label className="block mb-2 text-sm text-gray-700">Item Name</label>
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={e => handleNewNameChange(e.target.value)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                  placeholder="e.g., Milch, Gouda, Butter"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {showSuggestions && (
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                    {nameSuggestions.map(s => (
+                      <button
+                        key={`${s.name}-${s.groupName}`}
+                        type="button"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => handleSuggestionSelect(s)}
+                        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50 active:bg-gray-100 border-b border-gray-100 last:border-0"
+                      >
+                        <span className="text-gray-900">{s.name}</span>
+                        <span className="text-sm text-gray-400">{s.groupName}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div>
-                <label className="block mb-2 text-sm text-gray-700">Item Name</label>
-                <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g., Milk – Carton 1" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <label className="block mb-2 text-sm text-gray-700">Group Name</label>
+                <select
+                  value={newGroup}
+                  onChange={e => setNewGroup(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="">-- Select a group --</option>
+                  {groupTemplates.map(group => (
+                    <option key={group} value={group}>{group}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
@@ -690,7 +777,13 @@ export default function App() {
               {formError && (
                 <p className="text-sm text-red-600">{formError}</p>
               )}
-              <button onClick={handleAddItem} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Add Item</button>
+              <button
+                onClick={handleAddItem}
+                disabled={insertItemLoading || !newGroup.trim() || !newName.trim()}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {insertItemLoading ? "Wird hinzugefügt..." : "Add Item"}
+              </button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
