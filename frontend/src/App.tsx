@@ -580,7 +580,7 @@ export default function App() {
                       <Trash2 className="w-5 h-5 text-white" />
                     </div>
                     <div
-                      className={`flex items-center justify-between p-3 relative ${bg}`}
+                      className={`flex flex-col xs:flex-row xs:items-center xs:justify-between p-3 bg-white relative gap-1 xs:gap-0`}
                       style={swipeStyle(vg.representativeId)}
                       onTouchMove={swipeState?.itemId === vg.representativeId ? handleTouchMove : undefined}
                       onTouchEnd={swipeState?.itemId === vg.representativeId ? () => handleTouchEnd(vg.groupId, vg.representativeId) : undefined}
@@ -588,28 +588,31 @@ export default function App() {
                       onMouseUp={swipeState?.itemId === vg.representativeId ? () => handleMouseUp(vg.groupId, vg.representativeId) : undefined}
                       onMouseLeave={() => { if (swipeState?.itemId === vg.representativeId) handleMouseUp(vg.groupId, vg.representativeId); }}
                     >
-                      <div className="flex flex-col">
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-900">{vg.name}</span>
-                          {vg.count > 1 && (
-                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">×{vg.count}</span>
-                          )}
-                        </div>
-                        <span className="text-xs text-gray-500">Gruppe: {vg.groupName}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-900 text-sm">{vg.name}</span>
+                        {vg.count > 1 && (
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium flex-shrink-0">×{vg.count}</span>
+                        )}
                       </div>
-                      <div className="flex items-center gap-3">
+                      {/* Bottom row: date + action buttons */}
+                      <div className="flex items-center justify-between sm:justify-end gap-2">
                         <span className={`text-sm ${cls}`}>{label}</span>
-                        <button onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" })} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors">
-                          <Edit className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={e => { e.stopPropagation(); openDelete(vg.groupId, vg.representativeId); }}
-                          onTouchStart={e => handleTouchStart(e, vg.representativeId)}
-                          onMouseDown={e => handleMouseDown(e, vg.representativeId)}
-                          className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer select-none"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" })}
+                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={e => { e.stopPropagation(); openDelete(vg.groupId, vg.representativeId); }}
+                            onTouchStart={e => handleTouchStart(e, vg.representativeId)}
+                            onMouseDown={e => handleMouseDown(e, vg.representativeId)}
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer select-none"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -676,7 +679,7 @@ export default function App() {
                                   <Trash2 className="w-5 h-5 text-white" />
                                 </div>
                                 <div
-                                  className="flex items-center justify-between p-3 bg-white relative"
+                                  className="flex flex-col xs:flex-row xs:items-center xs:justify-between p-3 bg-white relative gap-1 xs:gap-0"
                                   style={swipeStyle(vg.representativeId)}
                                   onTouchMove={swipeState?.itemId === vg.representativeId ? handleTouchMove : undefined}
                                   onTouchEnd={swipeState?.itemId === vg.representativeId ? () => handleTouchEnd(vg.groupId, vg.representativeId) : undefined}
@@ -685,27 +688,33 @@ export default function App() {
                                   onMouseLeave={() => { if (swipeState?.itemId === vg.representativeId) handleMouseUp(vg.groupId, vg.representativeId); }}
                                 >
                                   <div className="flex items-center gap-2">
-                                    <span className="text-gray-900">{vg.name}</span>
+                                    <span className="text-gray-900 text-sm">{vg.name}</span>
                                     {vg.count > 1 && (
-                                      <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">×{vg.count}</span>
+                                      <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium flex-shrink-0">×{vg.count}</span>
                                     )}
                                   </div>
-                                  <div className="flex items-center gap-3">
+                                  {/* Bottom row: date + action buttons */}
+                                  <div className="flex items-center justify-between xs:justify-end gap-2">
                                     <span className={`text-sm ${cls}`}>{label}</span>
-                                    <button onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" })} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors">
-                                      <Edit className="w-4 h-4" />
-                                    </button>
-                                    <button
-                                      onClick={e => { e.stopPropagation(); openDelete(vg.groupId, vg.representativeId); }}
-                                      onTouchStart={e => handleTouchStart(e, vg.representativeId)}
-                                      onMouseDown={e => handleMouseDown(e, vg.representativeId)}
-                                      className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer select-none"
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </button>
+                                    <div className="flex items-center gap-1 flex-shrink-0">
+                                      <button
+                                        onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" })}
+                                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                      >
+                                        <Edit className="w-4 h-4" />
+                                      </button>
+                                      <button
+                                        onClick={e => { e.stopPropagation(); openDelete(vg.groupId, vg.representativeId); }}
+                                        onTouchStart={e => handleTouchStart(e, vg.representativeId)}
+                                        onMouseDown={e => handleMouseDown(e, vg.representativeId)}
+                                        className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer select-none"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
                                   </div>
                                 </div>
                               </div>
+                            </div>
                             );
                           })}
                         </div>
@@ -811,7 +820,12 @@ export default function App() {
             </div>
               <div>
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
-                <input type="date" value={atgExpiry} onChange={e => setAtgExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input 
+                  type="date" 
+                  value={atgExpiry} 
+                  onChange={e => setAtgExpiry(e.target.value)} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                />
               </div>
               <CountPicker value={atgCount} onChange={setAtgCount} />
               {formError && (
