@@ -633,7 +633,7 @@ export default function App() {
 
                 return (
                   <Accordion.Item key={group.id} value={group.id} className={`border rounded-lg overflow-hidden ${groupBorder}`}>
-                    <Accordion.Trigger className={`w-full flex items-center justify-between p-4 transition-colors group ${headerBg}`}>
+                    <Accordion.Trigger className={`w-full flex items-center justify-between p-4 transition-colors group text-left ${headerBg}`}>
                       <div className="flex items-center gap-4">
                         <div className="flex flex-col items-start">
                           <div className="flex items-center gap-2">
