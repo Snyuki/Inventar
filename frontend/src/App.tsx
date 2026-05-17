@@ -27,6 +27,7 @@ import {
 import { supabase } from './lib/supabase'
 import { AuthChangeEvent, Session } from '@supabase/supabase-js'
 import { checkWhitelist, fetchGroups, createGroup, addItem, updateItem, deleteItem, updateGroup, fetchGroupTemplates, fetchItemSuggestions } from "./lib/api";
+import BarcodeScanner from "./components/BarcodeScanner";
 
 
 // -------------------------------------------------------------------
@@ -52,6 +53,7 @@ export default function App() {
   const [addOpen,      setAddOpen]                = useState(false);
   const [editOpen,     setEditOpen]               = useState(false);
   const [atgOpen,      setAtgOpen]                = useState(false);
+  const [scannerOpen, setScannerOpen]             = useState(false);
   const [deleteOpen,   setDeleteOpen]             = useState(false);
   const [renameGroupOpen, setRenameGroupOpen]     = useState(false);
   const [editTarget,   setEditTarget]             = useState<EditTarget>(null);
@@ -73,6 +75,9 @@ export default function App() {
   const [atgCount,  setAtgCount]              = useState(1);
   const [atgName, setAtgName]                 = useState("");
   const [renameGroupName, setRenameGroupName] = useState("");
+
+  // Barcode
+  const [scannedEan, setScannedEan] = useState<string | null>(null);
 
   // Autocomplete
   const [nameSuggestions, setNameSuggestions] = useState<Array<{ name: string; groupName: string }>>([]);
@@ -244,7 +249,7 @@ export default function App() {
         // Promise.all gives race conditions so generic loop
         const newItems: Item[] = [];
         for (let i = 0; i < newCount; i++) {
-          const item = await addItem(existingGroup.id, newName.trim(), newExpiry || null);
+          const item = await addItem(existingGroup.id, newName.trim(), newExpiry || null, scannedEan);
           newItems.push(item);
         }
         setGroups(prev => prev.map(g => g.id === existingGroup.id ? { ...g, items: [...g.items, ...newItems] } : g));
@@ -262,6 +267,7 @@ export default function App() {
       setNewName("");
       setNewExpiry("");
       setNewCount(1);
+      setScannedEan(null);
       setAddOpen(false);
     } catch (e: any) {
       if (e.status === 409 && e.detail?.correct_group_name) {
@@ -284,7 +290,7 @@ export default function App() {
     try {
       const newItems = await Promise.all(
         Array.from({ length: atgCount }, (_, i) =>
-          addItem(group.id, atgName.trim() || group.groupName, atgExpiry || null)
+          addItem(group.id, atgName.trim() || group.groupName, atgExpiry || null, scannedEan)
         )
       );
       setGroups(prev => prev.map(g => g.id === atgTarget ? { ...g, items: [...g.items, ...newItems] } : g));
@@ -292,6 +298,7 @@ export default function App() {
       setAtgExpiry("");
       setAtgName("");
       setAtgCount(1);
+      setScannedEan(null);
       setAtgOpen(false);
 
     } catch (e) {
@@ -533,7 +540,7 @@ export default function App() {
             <h1>Inventory List</h1>
             <button
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              onClick={() => { setNewGroup(""); setNewName(""); setNewExpiry(""); setAddOpen(true); }}
+              onClick={() => { setNewGroup(""); setNewName(""); setNewExpiry(""); setAddOpen(true); setScannerOpen(true); }}
             >
               <Plus className="w-4 h-4" /> Add Item
             </button>
@@ -655,8 +662,8 @@ export default function App() {
                         <div
                           role="button"
                           tabIndex={0}
-                          onClick={e => { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); }}
-                          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); } }}
+                          onClick={e => { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); setScannerOpen(true); }}
+                          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); setScannerOpen(true); } }}
                           className="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors cursor-pointer"
                         >
                           <Plus className="w-4 h-4" />
@@ -729,7 +736,10 @@ export default function App() {
       </div>
 
       {/* ── Add Item dialog ── */}
-      <Dialog.Root open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) setFormError(null); setNewCount(1); setNameSuggestions([]); setShowSuggestions(false); }}>
+      <Dialog.Root open={addOpen} onOpenChange={(open) => { 
+        setAddOpen(open);
+        if (!open) setFormError(null); setNewCount(1); setNameSuggestions([]); setShowSuggestions(false); setScannerOpen(false); setScannedEan(null);
+        }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -738,6 +748,18 @@ export default function App() {
               <Dialog.Close asChild><button className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button></Dialog.Close>
             </div>
             <div className="space-y-4">
+              {scannerOpen && (
+                <BarcodeScanner
+                  onResult={(name, ean, suggestedGroup) => {
+                    if (name) setNewName(name);
+                    if (suggestedGroup) setNewGroup(suggestedGroup);
+                    setScannedEan(ean || null);
+                    setScannerOpen(false);
+                  }}
+                  onSkip={() => setScannerOpen(false)}
+                />
+              )}
+              {!scannerOpen && (
               <div className="relative">
                 <label className="block mb-2 text-sm text-gray-700">Item Name</label>
                 <input
@@ -765,6 +787,7 @@ export default function App() {
                   </div>
                 )}
               </div>
+              )}
               <div>
                 <label className="block mb-2 text-sm text-gray-700">Group Name</label>
                 <select
@@ -799,7 +822,10 @@ export default function App() {
       </Dialog.Root>
 
       {/* ── Add to Group dialog ── */}
-      <Dialog.Root open={atgOpen} onOpenChange={(open) => { setAtgOpen(open); if (!open) setFormError(null); setAtgCount(1); setAtgName(""); }}>
+      <Dialog.Root open={atgOpen} onOpenChange={(open) => { 
+        setAtgOpen(open); 
+        if (!open) setFormError(null); setAtgCount(1); setAtgName(""); setScannerOpen(false); setScannedEan(null);
+        }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -808,6 +834,17 @@ export default function App() {
               <Dialog.Close asChild><button className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button></Dialog.Close>
             </div>
             <div className="space-y-4">
+              {scannerOpen && (
+                <BarcodeScanner
+                  onResult={(name, ean, _suggestedGroup) => {
+                    if (name) setAtgName(name);
+                    setScannedEan(ean || null);
+                    setScannerOpen(false);
+                  }}
+                  onSkip={() => setScannerOpen(false)}
+                />
+              )}
+              {!scannerOpen && (
             <div>
               <label className="block mb-2 text-sm text-gray-700">Item Name</label>
               <input
@@ -818,6 +855,7 @@ export default function App() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
+              )}
               <div>
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
                 <input 

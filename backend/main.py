@@ -5,6 +5,8 @@ import os
 import uuid
 import re
 from datetime import datetime, timezone, timedelta
+import httpx
+import json
  
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status
@@ -54,6 +56,29 @@ item_name_registry_table = sqlalchemy.Table(
     sqlalchemy.Column("item_name",  sqlalchemy.String, nullable=False, unique=True),
     sqlalchemy.Column("group_id",   sqlalchemy.String, sqlalchemy.ForeignKey("item_groups.id"), nullable=False),
     sqlalchemy.Column("created_at", sqlalchemy.DateTime(timezone=True), nullable=True),
+    sqlalchemy.Column("ean",        sqlalchemy.String, nullable=True),
+)
+
+ean_product_cache_table = sqlalchemy.Table(
+    "ean_product_cache",
+    metadata,
+    sqlalchemy.Column("ean",          sqlalchemy.String,  primary_key=True),
+    sqlalchemy.Column("product_name", sqlalchemy.String,  nullable=True),
+    sqlalchemy.Column("brand",        sqlalchemy.String,  nullable=True),
+    sqlalchemy.Column("quantity",     sqlalchemy.String,  nullable=True),
+    sqlalchemy.Column("categories",   sqlalchemy.ARRAY(sqlalchemy.String), nullable=True),
+    sqlalchemy.Column("stores",       sqlalchemy.ARRAY(sqlalchemy.String), nullable=True),
+    sqlalchemy.Column("nutrition",    sqlalchemy.JSON,    nullable=True),
+    sqlalchemy.Column("allergens",    sqlalchemy.ARRAY(sqlalchemy.String), nullable=True),
+    sqlalchemy.Column("ingredients",  sqlalchemy.String,  nullable=True),
+    sqlalchemy.Column("fetched_at",   sqlalchemy.DateTime(timezone=True), nullable=False),
+)
+
+off_category_mapping_table = sqlalchemy.Table(
+    "off_category_mapping",
+    metadata,
+    sqlalchemy.Column("off_category",   sqlalchemy.String, primary_key=True),
+    sqlalchemy.Column("app_group_name", sqlalchemy.String, nullable=False),
 )
 
 sync_url = DATABASE_URL.replace("+asyncpg", "")
@@ -139,6 +164,7 @@ def get_current_user(
 class ItemIn(BaseModel):
     name: str
     ablaufdatum: Optional[str] = None   # "YYYY-MM-DD" or null
+    ean: str | None = None
 
     @field_validator("ablaufdatum")
     @classmethod
@@ -169,6 +195,14 @@ class GroupIn(BaseModel):
 
 class GroupUpdate(BaseModel):
     group_name: str
+
+class BarcodeResult(BaseModel):
+    ean: str
+    product_name: str | None
+    brand: str | None
+    quantity: str | None
+    suggested_group: str | None
+    from_cache: bool
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -279,10 +313,10 @@ async def create_item(group_id: str, body: ItemIn, user: str = Depends(get_curre
 
         # ON CONFLICT DO NOTHING to handle race conditions
         await database.execute("""
-            INSERT INTO item_name_to_group_registry (id, item_name, group_id)
-            VALUES (:id, :item_name, :group_id)
+            INSERT INTO item_name_to_group_registry (id, item_name, group_id, ean)
+            VALUES (:id, :item_name, :group_id, :ean)
             ON CONFLICT (item_name) DO NOTHING
-        """, values={"id": reg_id, "item_name": body.name, "group_id": group_id})
+        """, values={"id": reg_id, "item_name": body.name, "group_id": group_id, "ean": body.ean})
         
         # Fetch the actual registry entry -> might have been altered by concurrent request
         existing = await database.fetch_one(
@@ -293,6 +327,13 @@ async def create_item(group_id: str, body: ItemIn, user: str = Depends(get_curre
         reg_id = existing["id"]
     else:
         reg_id = existing["id"]
+        # Set Ean if not in fetched item
+        if body.ean and not existing["ean"]:
+            await database.execute(
+                item_name_registry_table.update().where(
+                    item_name_registry_table.c.id == reg_id
+                ).values(ean=body.ean)
+            )
 
     
     iid = str(uuid.uuid4())
@@ -444,9 +485,150 @@ async def item_suggestions(q: str = "", user: str = Depends(get_current_user)):
     return [{"name": row["item_name"], "groupName": row["group_name"]} for row in rows]
 
 
+@app.get("/api/barcode/{ean}", response_model=BarcodeResult)
+async def lookup_barcode(ean: str, user: str = Depends(get_current_user)):
+    """
+    Looks up a product by EAN.
+    Priority: Own cache -> Open Food Facts DB -> Empty Result.
+    Furthermore, resolves a group suggestion via the off_category_mapping table.
+    Priority: item_name_to_group_registry -> off_category_mapping -> None
+    """
+
+    # Check registry
+    registry_entry = await database.fetch_one("""
+        SELECT r.item_name, g.group_name
+        FROM item_name_to_group_registry r
+        JOIN item_groups g ON r.group_id = g.id
+        WHERE r.ean = :ean
+        LIMIT 1
+    """, values={"ean": ean})
+
+    definitive_group = registry_entry["group_name"] if registry_entry else None
+
+    # Search in own cache
+    cached = await database.fetch_one(
+        ean_product_cache_table.select().where(
+            ean_product_cache_table.c.ean == ean
+        )
+    )
+
+    if cached:
+        suggested_group = definitive_group or await resolve_group_suggestion(cached["categories"])
+        return BarcodeResult(
+            ean=ean,
+            product_name=cached["product_name"],
+            brand=cached["brand"],
+            quantity=cached["quantity"],
+            suggested_group=suggested_group,
+            from_cache=True,
+        )
+    
+    # No Cache -> Open Food Facts DB
+    try:
+        async with httpx.AsyncClient(timeout=constants.OFF_QUERY_TIMEOUT_IN_SECONDS) as client:
+            res = await client.get(
+                f"{constants.OFF_QUERY_BASE_URL}/{ean}?fields={constants.OFF_QUERY_CATEGORIES_STRING}",
+                headers={"User-Agent": "InventarApp/1.0 (private use)"},
+            )
+            data = res.json()
+    except Exception:
+        raise HTTPException(502, "Open Food Facts API nicht erreichbar.")
+    
+    if data.get("status") != 1 or not data.get("status_verbose") == "product found" or not data.get("product"):
+        # EAN unknown -> Empty reult
+        return BarcodeResult(
+            ean=ean,
+            product_name=None,
+            brand=None,
+            quantity=None,
+            suggested_group=definitive_group,
+            from_cache=False,
+        )
+    
+    p = data["product"]
+
+    product_name  = p.get("product_name_de") or p.get("product_name") or None
+    brand         = p.get("brands") or None
+    quantity      = p.get("quantity") or None
+    categories    = p.get("categories_tags") or []
+    stores        = p.get("stores_tags") or []
+    allergens     = p.get("allergens_tags") or []
+    ingredients   = p.get("ingredients_text") or None
+
+    raw_nut = p.get("nutriments") or {}
+    nutrition_dict = {k: v for k, v in raw_nut.items() if not k.endswith(("_100g", "_serving", "_unit", "_value"))} or None
+    nutrition = json.dumps(nutrition_dict) if nutrition_dict else None
+
+    # Found in OFF DB -> Store in cache
+    await database.execute("""
+        INSERT INTO ean_product_cache
+            (ean, product_name, brand, quantity, categories, stores, nutrition, allergens, ingredients, fetched_at)
+        VALUES
+            (:ean, :product_name, :brand, :quantity, :categories, :stores, :nutrition, :allergens, :ingredients, :fetched_at)
+        ON CONFLICT (ean) DO UPDATE SET
+            product_name = EXCLUDED.product_name,
+            brand        = EXCLUDED.brand,
+            quantity     = EXCLUDED.quantity,
+            categories   = EXCLUDED.categories,
+            stores       = EXCLUDED.stores,
+            nutrition    = EXCLUDED.nutrition,
+            allergens    = EXCLUDED.allergens,
+            ingredients  = EXCLUDED.ingredients,
+            fetched_at   = EXCLUDED.fetched_at
+    """, values={
+        "ean":          ean,
+        "product_name": product_name,
+        "brand":        brand,
+        "quantity":     quantity,
+        "categories":   categories,
+        "stores":       stores,
+        "nutrition":    nutrition,
+        "allergens":    allergens,
+        "ingredients":  ingredients,
+        "fetched_at":   datetime.now(timezone.utc),
+    })
+
+    suggested_group = definitive_group or await resolve_group_suggestion(categories)
+
+    return BarcodeResult(
+        ean=ean,
+        product_name=product_name,
+        brand=brand,
+        quantity=quantity,
+        suggested_group=suggested_group,
+        from_cache=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------------------------
+async def resolve_group_suggestion(categories: list[str] | None) -> str | None:
+    """
+    Maps a list of Open Food Facts Category tags to the most frequent
+    matching app group.
+    Returns None if no mapping exists.
+    """
+    if not categories:
+        return None
+    
+    rows = await database.fetch_all("""
+        SELECT app_group_name, COUNT(*) as hits
+        FROM off_category_mapping
+        WHERE off_category = ANY(:categories)
+        GROUP BY app_group_name
+        ORDER BY hits DESC, app_group_name ASC
+        LIMIT 1
+    """, values={"categories": categories})
+
+    if rows:
+        return rows[0]["app_group_name"]
+    return None

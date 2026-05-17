@@ -108,12 +108,13 @@ export async function fetchGroupTemplates(): Promise<string[]> {
 export async function addItem(
     groupId: string,
     name: string,
-    ablaufdatum: string | null
+    ablaufdatum: string | null,
+    ean: string | null = null
 ): Promise<Item> {
     const res = await fetch(`${BASE_URL}/groups/${groupId}/items`, {
         method: 'POST',
         headers: await headers(),
-        body: JSON.stringify({ name, ablaufdatum: ablaufdatum || null }),
+        body: JSON.stringify({ name, ablaufdatum: ablaufdatum || null, ean }),
     });
     const i = await handleResponse(res);
     return {
@@ -148,6 +149,22 @@ export async function deleteItem(itemId: string): Promise<void> {
 
 export async function fetchItemSuggestions(query: string): Promise<Array<{ name: string; groupName: string }>> {
     const res = await fetch(`${BASE_URL}/items/suggestions?q=${encodeURIComponent(query)}`, {
+        headers: await headers(),
+    });
+    return handleResponse(res);
+}
+
+export interface BarcodeResult {
+    ean: string;
+    product_name: string | null;
+    brand: string | null;
+    quantity: string | null;
+    suggested_group: string | null;
+    from_cache: boolean;
+}
+
+export async function lookupBarcode(ean: string): Promise<BarcodeResult> {
+    const res = await fetch(`${BASE_URL}/barcode/${ean}`, {
         headers: await headers(),
     });
     return handleResponse(res);
