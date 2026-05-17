@@ -526,6 +526,11 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
       ) : (
         /* ── Default: grouped accordion ── */
         <Accordion.Root type="multiple" className="space-y-3">
+          {groups.length === 0 && (
+            <div className="text-center py-12 text-gray-400">
+              <p className="text-sm">Keine Items in diesem Lagerort.</p>
+            </div>
+          )}
           {groups.map(group => {
             const gs  = groupStatus(group);
             const exp = earliestExpiry(group);
