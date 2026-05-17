@@ -108,12 +108,13 @@ export async function fetchGroupTemplates(): Promise<string[]> {
 export async function addItem(
     groupId: string,
     name: string,
-    ablaufdatum: string | null
+    ablaufdatum: string | null,
+    ean: string | null = null
 ): Promise<Item> {
     const res = await fetch(`${BASE_URL}/groups/${groupId}/items`, {
         method: 'POST',
         headers: await headers(),
-        body: JSON.stringify({ name, ablaufdatum: ablaufdatum || null }),
+        body: JSON.stringify({ name, ablaufdatum: ablaufdatum || null, ean }),
     });
     const i = await handleResponse(res);
     return {
