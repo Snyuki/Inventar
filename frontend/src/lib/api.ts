@@ -1,4 +1,4 @@
-import { Item, ItemGroup } from "../types";
+import { Item, ItemGroup, Storage } from "../types";
 import { supabase } from "./supabase";
 
 // Fallback to /api for dev stage
@@ -58,9 +58,17 @@ export async function checkWhitelist(token: string): Promise<boolean> {
     });
     return res.ok;
 }
+
+export async function fetchStorages(): Promise<Storage[]> {
+    const res = await fetch(`${BASE_URL}/storages`, {
+        headers: await headers(),
+    });
+    const data = await handleResponse(res);
+    return data.map((storage: any) => ({ id: storage.id, name: storage.name }));
+}
  
-export async function createGroup(groupName: string): Promise<ItemGroup> {
-  const res = await fetch(`${BASE_URL}/groups`, {
+export async function createGroup(storageId: string, groupName: string): Promise<ItemGroup> {
+  const res = await fetch(`${BASE_URL}/storages/${storageId}/groups`, {
     method: "POST",
     headers: await headers(),
     body: JSON.stringify({ group_name: groupName }),
@@ -69,8 +77,8 @@ export async function createGroup(groupName: string): Promise<ItemGroup> {
   return { id: g.id, groupName: g.group_name, items: [] };
 }
 
-export async function fetchGroups(): Promise<ItemGroup[]> {
-    const res = await fetch(`${BASE_URL}/groups`, {
+export async function fetchGroups(storageId: string): Promise<ItemGroup[]> {
+    const res = await fetch(`${BASE_URL}/storages/${storageId}/groups`, {
         headers: await headers(),
     });
     const data = await handleResponse(res);
@@ -106,12 +114,13 @@ export async function fetchGroupTemplates(): Promise<string[]> {
 }
 
 export async function addItem(
+    storageId: string,
     groupId: string,
     name: string,
     ablaufdatum: string | null,
     ean: string | null = null
 ): Promise<Item> {
-    const res = await fetch(`${BASE_URL}/groups/${groupId}/items`, {
+    const res = await fetch(`${BASE_URL}/storages/${storageId}/groups/${groupId}/items`, {
         method: 'POST',
         headers: await headers(),
         body: JSON.stringify({ name, ablaufdatum: ablaufdatum || null, ean }),

@@ -32,11 +32,19 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 database = databases.Database(DATABASE_URL, min_size=1, max_size=5, statement_cache_size=0)
 metadata = sqlalchemy.MetaData()
 
+storages_table = sqlalchemy.Table(
+    "storages",
+    metadata,
+    sqlalchemy.Column("id",   sqlalchemy.dialects.postgresql.UUID(as_uuid=False), primary_key=True),
+    sqlalchemy.Column("name", sqlalchemy.String, nullable=False, unique=True),
+)
+ 
 groups_table = sqlalchemy.Table(
     "item_groups",
     metadata,
     sqlalchemy.Column("id",         sqlalchemy.String,  primary_key=True),
     sqlalchemy.Column("group_name", sqlalchemy.String,  nullable=False),
+    sqlalchemy.Column("storage_id", sqlalchemy.dialects.postgresql.UUID(as_uuid=False), sqlalchemy.ForeignKey("storages.id"), nullable=False),
 )
 
 items_table = sqlalchemy.Table(
@@ -45,14 +53,15 @@ items_table = sqlalchemy.Table(
     sqlalchemy.Column("id",          sqlalchemy.String, primary_key=True),
     sqlalchemy.Column("group_id",    sqlalchemy.String, sqlalchemy.ForeignKey("item_groups.id"), nullable=False),
     sqlalchemy.Column("kaufdatum",   sqlalchemy.String, nullable=False),  # ISO date
-    sqlalchemy.Column("ablaufdatum", sqlalchemy.String, nullable=True),   # ISO date or NULL
-    sqlalchemy.Column("name_to_group_id", sqlalchemy.String, sqlalchemy.ForeignKey("item_name_to_group_registry.id"), nullable=True),
+    sqlalchemy.Column("ablaufdatum",      sqlalchemy.String, nullable=True),   # ISO date or NULL
+    sqlalchemy.Column("name_to_group_id", sqlalchemy.dialects.postgresql.UUID(as_uuid=False), sqlalchemy.ForeignKey("item_name_to_group_registry.id"), nullable=True),
+    sqlalchemy.Column("storage_id",       sqlalchemy.dialects.postgresql.UUID(as_uuid=False), sqlalchemy.ForeignKey("storages.id"), nullable=False),
 )
 
 item_name_registry_table = sqlalchemy.Table(
     "item_name_to_group_registry",
     metadata,
-    sqlalchemy.Column("id",         sqlalchemy.String, primary_key=True),
+    sqlalchemy.Column("id",         sqlalchemy.dialects.postgresql.UUID(as_uuid=False), primary_key=True),
     sqlalchemy.Column("item_name",  sqlalchemy.String, nullable=False, unique=True),
     sqlalchemy.Column("group_id",   sqlalchemy.String, sqlalchemy.ForeignKey("item_groups.id"), nullable=False),
     sqlalchemy.Column("created_at", sqlalchemy.DateTime(timezone=True), nullable=True),
@@ -196,6 +205,10 @@ class GroupIn(BaseModel):
 class GroupUpdate(BaseModel):
     group_name: str
 
+class StorageOut(BaseModel):
+    id: str
+    name: str
+
 class BarcodeResult(BaseModel):
     ean: str
     product_name: str | None
@@ -215,13 +228,23 @@ async def auth_check(user: str = Depends(get_current_user)):
     """
     return {"allowed": True, "email": user}
 
-@app.get("/api/groups", response_model=list[GroupOut])
-async def list_groups(user: str = Depends(get_current_user)):
+
+@app.get("/api/storages", response_model=list[StorageOut])
+async def list_storages(user: str = Depends(get_current_user)):
     """
-    Return all groups
+    :returns: All availabe storages
+    """
+    rows = await database.fetch_all(storages_table.select().order_by(storages_table.c.name))
+    return [StorageOut(id=str(r["id"]), name=r["name"]) for r in rows]
+
+
+@app.get("/api/storages/{storage_id}/groups", response_model=list[GroupOut])
+async def list_groups(storage_id: str, user: str = Depends(get_current_user)):
+    """
+    Return all groups and their items for a specific storage.
     """
     group_rows = await database.fetch_all(
-        groups_table.select()
+        groups_table.select().where(groups_table.c.storage_id == storage_id)
     )
     result = []
     for g in group_rows:
@@ -230,7 +253,8 @@ async def list_groups(user: str = Depends(get_current_user)):
             FROM items i
             JOIN item_name_to_group_registry r ON i.name_to_group_id = r.id
             WHERE i.group_id = :group_id
-        """, values={"group_id": g["id"]})
+              AND i.storage_id = :storage_id
+        """, values={"group_id": g["id"], "storage_id": storage_id})
         result.append(GroupOut(
             id=g["id"],
             group_name=g["group_name"],
@@ -244,11 +268,11 @@ async def list_groups(user: str = Depends(get_current_user)):
     return result
 
 
-@app.post("/api/groups", response_model=GroupOut, status_code=201)
-async def create_group(body: GroupIn, user: str = Depends(get_current_user)):
+@app.post("/api/storages/{storage_id}/groups", response_model=GroupOut, status_code=201)
+async def create_group(storage_id: str, body: GroupIn, user: str = Depends(get_current_user)):
     gid = str(uuid.uuid4())
     await database.execute(groups_table.insert().values(
-        id=gid, group_name=body.group_name
+        id=gid, group_name=body.group_name, storage_id=storage_id
     ))
     return GroupOut(id=gid, group_name=body.group_name, items=[])
 
@@ -288,11 +312,12 @@ async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get
     ])
 
 
-@app.post("/api/groups/{group_id}/items", response_model=ItemOut, status_code=201)
-async def create_item(group_id: str, body: ItemIn, user: str = Depends(get_current_user)):
+@app.post("/api/storages/{storage_id}/groups/{group_id}/items", response_model=ItemOut, status_code=201)
+async def create_item(storage_id: str, group_id: str, body: ItemIn, user: str = Depends(get_current_user)):
     g = await database.fetch_one(
         groups_table.select().where(
-            (groups_table.c.id == group_id)     # The 'c' is for 'column'
+            (groups_table.c.id == group_id) &     # The 'c' is for 'column'
+            (groups_table.c.storage_id == storage_id)
         )
     )
     if not g:
@@ -349,7 +374,7 @@ async def create_item(group_id: str, body: ItemIn, user: str = Depends(get_curre
     await database.execute(items_table.insert().values(
         id=iid, group_id=group_id,
         kaufdatum=kauf, ablaufdatum=body.ablaufdatum,
-        name_to_group_id=reg_id,
+        name_to_group_id=reg_id, storage_id=storage_id,
     ))
     return ItemOut(id=iid, name=body.name, kaufdatum=kauf, ablaufdatum=body.ablaufdatum)
 
@@ -640,3 +665,19 @@ async def resolve_group_suggestion(categories: list[str] | None) -> str | None:
     if rows:
         return rows[0]["app_group_name"]
     return None
+
+
+async def get_storage_id(storage_id: str) -> str:
+    """
+    Resolves a storage id
+
+    :param storage_id: The storage id to resolve
+    :returns: The storage id if existing
+    :raises 404: If the storage does not exist 
+    """
+    row = await database.fetch_one(
+        storages_table.select().where(storages_table.c.id == storage_id)
+    )
+    if not row:
+        raise HTTPException(404, f"Storage '{storage_id}' not found")
+    return storage_id

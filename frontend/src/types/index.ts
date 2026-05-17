@@ -11,4 +11,9 @@ export interface ItemGroup {
   items: Item[];
 }
 
+export interface Storage {
+  id: string;
+  name: string;
+}
+
 export type ItemStatus = "expired" | "expiring" | "ok" | "noexp";
