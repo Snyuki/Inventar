@@ -152,3 +152,19 @@ export async function fetchItemSuggestions(query: string): Promise<Array<{ name:
     });
     return handleResponse(res);
 }
+
+export interface BarcodeResult {
+    ean: string;
+    product_name: string | null;
+    brand: string | null;
+    quantity: string | null;
+    suggested_group: string | null;
+    from_cache: boolean;
+}
+
+export async function lookupBarcode(ean: string): Promise<BarcodeResult> {
+    const res = await fetch(`${BASE_URL}/barcode/${ean}`, {
+        headers: await headers(),
+    });
+    return handleResponse(res);
+}
