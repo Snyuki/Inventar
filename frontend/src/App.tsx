@@ -6,7 +6,7 @@ import InventoryView from "./components/InventoryView";
 import { Storage } from "./types";
 import { supabase } from "./lib/supabase";
 import { AuthChangeEvent, Session } from "@supabase/supabase-js";
-import { checkWhitelist, fetchStorages } from "./lib/api";
+import { checkWhitelist, fetchGroupTemplates, fetchStorages } from "./lib/api";
 import { DEFAULT_STORAGE } from "./lib/constants";
 
 
@@ -20,6 +20,8 @@ export default function App() {
   const [storages, setStorages]                 = useState<Storage[]>([]);
   const [activeStorageId, setActiveStorageId] = useState<string | null>(null);
 
+  // Data
+  const [groupTemplates, setGroupTemplates] = useState<string[]>([]);
 
   // ---- Auth handlers --------------------------------------------------
   // Handle login and session
@@ -64,6 +66,12 @@ export default function App() {
       const defaultStorage = data.find(s => s.name === DEFAULT_STORAGE) ?? data[0];
       if (defaultStorage) setActiveStorageId(defaultStorage.id);
     }).catch(console.error);
+  }, [session]);
+
+  // Populate GroupTemplates
+    useEffect(() => {
+    if (!session) return;
+    fetchGroupTemplates().then(setGroupTemplates).catch(console.error);
   }, [session]);
 
 
@@ -171,7 +179,7 @@ export default function App() {
       {/* ── Main ── */}
       <div className="flex-1 flex items-start justify-center p-4 sm:p-8">
         {activeStorageId && (
-          <InventoryView key={activeStorageId} storageId={activeStorageId} />
+          <InventoryView key={activeStorageId} storageId={activeStorageId} groupTemplates={groupTemplates} />
         )}
       </div>
  

@@ -15,6 +15,9 @@ export default defineConfig({
       '192.168.1.73',
       'localhost',  
     ],
+  hmr: {
+    port: 5174,  // WebSocket auf separatem Port, nicht durch ngrok getunnelt
+  },
     proxy: {
       // Proxy API calls to the FastAPI backend during development
       "/api": "http://localhost:8000",

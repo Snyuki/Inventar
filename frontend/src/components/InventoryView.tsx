@@ -19,7 +19,6 @@ import {
   addItem,
   updateItem,
   deleteItem,
-  fetchGroupTemplates,
   fetchItemSuggestions,
 } from "../lib/api";
 import BarcodeScanner from "./BarcodeScanner";
@@ -43,13 +42,13 @@ interface VisualGroup {
 
 interface Props {
     storageId: string;
+    groupTemplates: string[];
 }
 
 
-export default function InventoryView({ storageId }: Props) {
+export default function InventoryView({ storageId, groupTemplates }: Props) {
   // Data
   const [groups, setGroups]                 = useState<ItemGroup[]>([]);
-  const [groupTemplates, setGroupTemplates] = useState<string[]>([]);
   const [dataError, setDataError]           = useState<string | null>(null);
   const [formError, setFormError]           = useState<string | null>(null);
 
@@ -97,11 +96,6 @@ export default function InventoryView({ storageId }: Props) {
   const [touchStart, setTouchStart] = useState<number | null>(null);
 
   // ---- Data loading ---------------------------------------------------
-  // Load Group Templates
-  useEffect(() => {
-    fetchGroupTemplates().then(setGroupTemplates).catch(console.error);
-  });
-
   // Load Inventory
   useEffect(() => {
       setDataLoading(true);
