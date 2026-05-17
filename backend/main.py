@@ -255,6 +255,14 @@ async def create_group(body: GroupIn, user: str = Depends(get_current_user)):
 
 @app.put("/api/groups/{group_id}")
 async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get_current_user)):
+    """
+    Updates a group.
+
+    :param group_id: The group to update
+    :param body: The updated group
+
+    :return: The updated group
+    """
     g = await database.fetch_one(
         groups_table.select().where(
             (groups_table.c.id == group_id)

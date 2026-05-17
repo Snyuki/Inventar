@@ -55,11 +55,9 @@ export default function App() {
   const [atgOpen,      setAtgOpen]                = useState(false);
   const [scannerOpen, setScannerOpen]             = useState(false);
   const [deleteOpen,   setDeleteOpen]             = useState(false);
-  const [renameGroupOpen, setRenameGroupOpen]     = useState(false);
   const [editTarget,   setEditTarget]             = useState<EditTarget>(null);
   const [deleteTarget, setDeleteTarget]           = useState<DeleteTarget>(null);
   const [atgTarget,    setAtgTarget]              = useState<ATGTarget>(null);
-  const [renameGroupTarget, setRenameGroupTarget] = useState<{ id: string; name: string } | null>(null);
   const [dataLoading, setDataLoading]             = useState(false);
   const [deleteLoading, setDeleteLoading]         = useState(false);
   const [insertItemLoading, setInsertItemLoading] = useState(false); 
@@ -74,7 +72,6 @@ export default function App() {
   const [newCount,  setNewCount]              = useState(1);
   const [atgCount,  setAtgCount]              = useState(1);
   const [atgName, setAtgName]                 = useState("");
-  const [renameGroupName, setRenameGroupName] = useState("");
 
   // Barcode
   const [scannedEan, setScannedEan] = useState<string | null>(null);
@@ -312,18 +309,6 @@ export default function App() {
     setEditExpiry(item.ablaufdatum ?? "");
     setEditOpen(true);
   };
-
-  const handleRenameGroup = async () => {
-    if (!renameGroupTarget || !renameGroupName.trim()) return;
-    setFormError(null);
-    try {
-      const updated = await updateGroup(renameGroupTarget.id, renameGroupName.trim());
-      setGroups(prev => prev.map(g => g.id === updated.id ? { ...g, groupName: updated.groupName } : g));
-      setRenameGroupOpen(false);
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Failed to rename group.")
-    }
-  }
 
   const handleSaveEdit = async () => {
     if (!editTarget || !editName.trim()) return;
@@ -645,15 +630,6 @@ export default function App() {
                         <div className="flex flex-col items-start">
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-gray-900">{group.groupName}</span>
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              onClick={e => { e.stopPropagation(); setRenameGroupTarget({ id: group.id, name: group.groupName }); setRenameGroupName(group.groupName); setRenameGroupOpen(true); }}
-                              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setRenameGroupTarget({ id: group.id, name: group.groupName }); setRenameGroupName(group.groupName); setRenameGroupOpen(true); } }}
-                              className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors cursor-pointer"
-                            >
-                              <Edit className="w-3.5 h-3.5" />
-                            </div>
                           </div>
                           <span className="text-sm text-gray-500">{subText}</span>
                         </div>
@@ -897,32 +873,6 @@ export default function App() {
                 <p className="text-sm text-red-600">{formError}</p>
               )}
               <button onClick={handleSaveEdit} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Save Changes</button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      {/* ── Edit Group Name dialog ── */}
-      <Dialog.Root open={renameGroupOpen} onOpenChange={(open) => { setRenameGroupOpen(open); if (!open) setFormError(null); }}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
-            <div className="flex items-center justify-between mb-4">
-              <Dialog.Title className="font-medium text-gray-900">Rename Group</Dialog.Title>
-              <Dialog.Close asChild><button className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button></Dialog.Close>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="block mb-2 text-sm text-gray-700">Group Name</label>
-                <input
-                  type="text"
-                  value={renameGroupName}
-                  onChange={e => setRenameGroupName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              {formError && <p className="text-sm text-red-600">{formError}</p>}
-              <button onClick={handleRenameGroup} disabled={!renameGroupName.trim()} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Save</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
