@@ -360,7 +360,7 @@ async def list_group_templates(user: str = Depends(get_current_user)):
     Return all available group template names in insertion order.
     """
     rows = await database.fetch_all(
-        "SELECT group_name FROM group_templates ORDER BY ctid"
+        "SELECT group_name FROM group_templates ORDER BY LOWER(group_name) ASC"
     )
     return [row["group_name"] for row in rows]
 
