@@ -8,7 +8,6 @@ from datetime import datetime, timezone, timedelta
 import httpx
 import json
  
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -96,6 +95,8 @@ engine = sqlalchemy.create_engine(sync_url)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print(f"DEBUG SUPABASE_URL: {SUPABASE_URL}")
+    print(f"DEBUG JWKS_URL: {JWKS_URL}")
     metadata.create_all(engine)
     await database.connect()
     yield
