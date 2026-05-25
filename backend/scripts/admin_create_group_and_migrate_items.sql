@@ -22,6 +22,7 @@ DECLARE
 
     v_new_group_id    TEXT;
     v_sonstiges_id    TEXT;
+    v_storage_id      UUID;
     v_item_name       TEXT;
     v_registry_id     UUID;
     v_registry_group  TEXT;
@@ -29,15 +30,28 @@ DECLARE
     v_skipped_count   INT := 0;
 BEGIN
 
-    -- ── 1. Neue Gruppe erstellen ──────────────────────────
+    -- ── 1. Sonstiges-Gruppe finden (zuerst, da wir storage_id brauchen) ──
+    SELECT id, storage_id INTO v_sonstiges_id, v_storage_id
+    FROM item_groups
+    WHERE LOWER(group_name) = LOWER(v_sonstiges_name);
+
+    IF v_sonstiges_id IS NULL THEN
+        RAISE EXCEPTION 'Quell-Gruppe "%" nicht gefunden. Abbruch.', v_sonstiges_name;
+    END IF;
+
+    RAISE NOTICE 'Quell-Gruppe "%" gefunden (id: %, storage_id: %).', v_sonstiges_name, v_sonstiges_id, v_storage_id;
+
+
+    -- ── 2. Neue Gruppe erstellen (im selben Storage wie Sonstiges) ────────
     SELECT id INTO v_new_group_id
     FROM item_groups
-    WHERE LOWER(group_name) = LOWER(v_new_group_name);
+    WHERE LOWER(group_name) = LOWER(v_new_group_name)
+      AND storage_id = v_storage_id;
 
     IF v_new_group_id IS NULL THEN
         v_new_group_id := gen_random_uuid()::TEXT;
-        INSERT INTO item_groups (id, group_name)
-        VALUES (v_new_group_id, v_new_group_name);
+        INSERT INTO item_groups (id, group_name, storage_id)
+        VALUES (v_new_group_id, v_new_group_name, v_storage_id);
         RAISE NOTICE 'Gruppe "%" erstellt (id: %).', v_new_group_name, v_new_group_id;
     ELSE
         RAISE NOTICE 'Gruppe "%" existiert bereits (id: %).', v_new_group_name, v_new_group_id;
@@ -50,18 +64,6 @@ BEGIN
         INSERT INTO group_templates (group_name) VALUES (v_new_group_name);
         RAISE NOTICE 'Gruppe "%" in group_templates eingetragen.', v_new_group_name;
     END IF;
-
-
-    -- ── 2. Sonstiges-Gruppe finden ────────────────────────
-    SELECT id INTO v_sonstiges_id
-    FROM item_groups
-    WHERE LOWER(group_name) = LOWER(v_sonstiges_name);
-
-    IF v_sonstiges_id IS NULL THEN
-        RAISE EXCEPTION 'Quell-Gruppe "%" nicht gefunden. Abbruch.', v_sonstiges_name;
-    END IF;
-
-    RAISE NOTICE 'Quell-Gruppe "%" gefunden (id: %).', v_sonstiges_name, v_sonstiges_id;
 
 
     -- ── 3. Items migrieren ────────────────────────────────
