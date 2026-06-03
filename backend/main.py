@@ -89,6 +89,18 @@ off_category_mapping_table = sqlalchemy.Table(
     sqlalchemy.Column("app_group_name", sqlalchemy.String, nullable=False),
 )
 
+crud_logs_table = sqlalchemy.Table(
+    "crud_logs",
+    metadata,
+    sqlalchemy.Column("id",          sqlalchemy.dialects.postgresql.UUID(as_uuid=False), primary_key=True, server_default=sqlalchemy.text("gen_random_uuid()")),
+    sqlalchemy.Column("timestamp",   sqlalchemy.DateTime(timezone=True), nullable=False, server_default=sqlalchemy.text("now()")),
+    sqlalchemy.Column("user_email",  sqlalchemy.String, nullable=False),
+    sqlalchemy.Column("action",      sqlalchemy.String, nullable=False),
+    sqlalchemy.Column("entity_type", sqlalchemy.String, nullable=False),
+    sqlalchemy.Column("entity_id",   sqlalchemy.String, nullable=False),
+    sqlalchemy.Column("payload",     sqlalchemy.JSON,   nullable=True),
+)
+
 sync_url = DATABASE_URL.replace("+asyncpg", "")
 engine = sqlalchemy.create_engine(sync_url)
 
@@ -275,6 +287,7 @@ async def create_group(storage_id: str, body: GroupIn, user: str = Depends(get_c
     await database.execute(groups_table.insert().values(
         id=gid, group_name=body.group_name, storage_id=storage_id
     ))
+    await log_action(user, "CREATE", "group", gid, {"group_name": body.group_name, "storage_id": storage_id})
     return GroupOut(id=gid, group_name=body.group_name, items=[])
 
 
@@ -307,6 +320,7 @@ async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get
         WHERE i.group_id = :group_id
     """, values={"group_id": group_id})
 
+    await log_action(user, "UPDATE", "group", group_id, {"group_name": body.group_name})
     return GroupOut(id=group_id, group_name=body.group_name, items=[
         ItemOut(id=i["id"], name=i["name"], kaufdatum=i["kaufdatum"], ablaufdatum=i["ablaufdatum"])
         for i in item_rows
@@ -377,6 +391,7 @@ async def create_item(storage_id: str, group_id: str, body: ItemIn, user: str = 
         kaufdatum=kauf, ablaufdatum=body.ablaufdatum,
         name_to_group_id=reg_id, storage_id=storage_id,
     ))
+    await log_action(user, "CREATE", "item", iid, {"name": body.name, "group_id": group_id, "storage_id": storage_id, "ablaufdatum": body.ablaufdatum})
     return ItemOut(id=iid, name=body.name, kaufdatum=kauf, ablaufdatum=body.ablaufdatum)
 
 
@@ -446,6 +461,7 @@ async def update_item(item_id: str, body: ItemIn, user: str = Depends(get_curren
             )
         )
 
+    await log_action(user, "UPDATE", "item", item_id, {"name": body.name, "ablaufdatum": body.ablaufdatum})
     return ItemOut(id=item_id, name=body.name, kaufdatum=row["kaufdatum"], ablaufdatum=body.ablaufdatum)
 
 
@@ -460,6 +476,18 @@ async def delete_item(item_id: str, user: str = Depends(get_current_user)):
     
     group_id = row["group_id"]
     name_to_group_id = row["name_to_group_id"]
+
+    registry_row = await database.fetch_one(
+        item_name_registry_table.select().where(
+            item_name_registry_table.c.id == row["name_to_group_id"]
+        )
+    )
+
+    await log_action(user, "DELETE", "item", item_id, {
+        "name": registry_row["item_name"] if registry_row else None,
+        "group_id": row["group_id"],
+        "name_to_group_id": str(name_to_group_id) if name_to_group_id else None,
+    })
 
     # Delete Item
     await database.execute(items_table.delete().where(items_table.c.id == item_id))
@@ -682,3 +710,20 @@ async def get_storage_id(storage_id: str) -> str:
     if not row:
         raise HTTPException(404, f"Storage '{storage_id}' not found")
     return storage_id
+
+
+async def log_action(user: str, action: str, entity_type: str, entity_id: str, payload: dict):
+    """
+    Writes a CRUD audit log entry. Failures are swallowed so logging never
+    breaks the actual operation.
+    """
+    try:
+        await database.execute(crud_logs_table.insert().values(
+            user_email=user,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            payload=payload,
+        ))
+    except Exception as e:
+        print(f"Warning: Failed to write audit log: {e}")

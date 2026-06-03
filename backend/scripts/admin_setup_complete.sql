@@ -272,3 +272,29 @@ INSERT INTO off_category_mapping (off_category, app_group_name) VALUES
     ('en:vegetable-oils',               'Öl')
 
 ON CONFLICT (off_category) DO NOTHING;
+
+-- ------------------------------------------------------------
+-- 8. CRUD Audit Log
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS crud_logs (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    timestamp   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    user_email  TEXT NOT NULL,
+    action      TEXT NOT NULL,        -- 'CREATE', 'UPDATE', 'DELETE'
+    entity_type TEXT NOT NULL,        -- 'item', 'group'
+    entity_id   TEXT NOT NULL,
+    payload     JSONB
+);
+
+COMMENT ON TABLE crud_logs IS
+    'Audit-Log aller schreibenden Datenbankoperationen. Wird automatisch vom Backend befüllt.';
+COMMENT ON COLUMN crud_logs.action IS
+    'Art der Operation: CREATE, UPDATE oder DELETE.';
+COMMENT ON COLUMN crud_logs.entity_type IS
+    'Typ der betroffenen Entität: item oder group.';
+COMMENT ON COLUMN crud_logs.payload IS
+    'Kontextdaten zur Operation (z.B. Name, Gruppe, alte/neue Werte).';
+
+CREATE INDEX IF NOT EXISTS idx_crud_logs_timestamp   ON crud_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_crud_logs_user_email  ON crud_logs(user_email);
+CREATE INDEX IF NOT EXISTS idx_crud_logs_entity_type ON crud_logs(entity_type);
