@@ -77,7 +77,8 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
   const [atgName, setAtgName]                 = useState("");
 
   // Barcode
-  const [scannedEan, setScannedEan] = useState<string | null>(null);
+  const [scannedEan, setScannedEan]   = useState<string | null>(null);
+  const [eanNotFound, setEanNotFound] = useState<string | null>(null);
 
   // Autocomplete
   const [nameSuggestions, setNameSuggestions] = useState<Array<{ name: string; groupName: string }>>([]);
@@ -627,7 +628,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
       {/* ── Add Item dialog ── */}
       <Dialog.Root open={addOpen} onOpenChange={(open) => { 
         setAddOpen(open);
-        if (!open) setFormError(null); setNewCount(1); setNameSuggestions([]); setShowSuggestions(false); setScannerOpen(false); setScannedEan(null);
+        if (!open) setFormError(null); setNewCount(1); setNameSuggestions([]); setShowSuggestions(false); setScannerOpen(false); setScannedEan(null); setEanNotFound(null); ;
         }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
@@ -640,7 +641,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
               {scannerOpen && (
                 <BarcodeScanner
                   onResult={(name, ean, suggestedGroup) => {
-                    if (name) setNewName(name);
+                    if (name) setNewName(name); else setEanNotFound(ean);
                     if (suggestedGroup) setNewGroup(suggestedGroup);
                     setScannedEan(ean || null);
                     setScannerOpen(false);
@@ -674,6 +675,11 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
                       </button>
                     ))}
                   </div>
+                )}
+                {eanNotFound && (
+                  <p className="text-xs text-yellow-600 mt-1 ml-1">
+                    Produkt für EAN {eanNotFound} nicht gefunden.
+                  </p>
                 )}
               </div>
               )}
@@ -713,7 +719,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
       {/* ── Add to Group dialog ── */}
       <Dialog.Root open={atgOpen} onOpenChange={(open) => { 
         setAtgOpen(open); 
-        if (!open) setFormError(null); setAtgCount(1); setAtgName(""); setScannerOpen(false); setScannedEan(null);
+        if (!open) setFormError(null); setAtgCount(1); setAtgName(""); setScannerOpen(false); setScannedEan(null); setEanNotFound(null);
         }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
@@ -726,7 +732,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
               {scannerOpen && (
                 <BarcodeScanner
                   onResult={(name, ean, _suggestedGroup) => {
-                    if (name) setAtgName(name);
+                    if (name) setAtgName(name); else setEanNotFound(ean);
                     setScannedEan(ean || null);
                     setScannerOpen(false);
                   }}
@@ -734,16 +740,21 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
                 />
               )}
               {!scannerOpen && (
-            <div>
-              <label className="block mb-2 text-sm text-gray-700">Item Name</label>
-              <input
-                type="text"
-                value={atgName}
-                onChange={e => setAtgName(e.target.value)}
-                placeholder={`e.g. ${atgTarget ? groups.find(g => g.id === atgTarget)?.groupName : ""}`}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+              <div>
+                <label className="block mb-2 text-sm text-gray-700">Item Name</label>
+                <input
+                  type="text"
+                  value={atgName}
+                  onChange={e => setAtgName(e.target.value)}
+                  placeholder={`e.g. ${atgTarget ? groups.find(g => g.id === atgTarget)?.groupName : ""}`}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {eanNotFound && (
+                  <p className="text-xs text-yellow-600 mt-1 ml-1">
+                    Produkt für EAN {eanNotFound} nicht gefunden.
+                  </p>
+                )}
+              </div>
               )}
               <div>
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
