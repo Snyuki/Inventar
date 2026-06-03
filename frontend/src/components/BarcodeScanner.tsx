@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
-import { NotFoundException } from "@zxing/library";
+import { BarcodeFormat, DecodeHintType, NotFoundException } from "@zxing/library";
 import { Camera, Loader2 } from "lucide-react";
 import { lookupBarcode } from "../lib/api";
 
@@ -8,6 +8,19 @@ interface BarcodeScannerProps {
   onResult: (productName: string, ean: string, suggestedGroup: string | null) => void;
   onSkip: () => void;
 }
+
+const DECODE_HINTS = new Map<DecodeHintType, any>([
+  [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8]],
+  [DecodeHintType.TRY_HARDER, true],
+]);
+
+const CAMERA_CONSTRAINTS: MediaStreamConstraints = {
+  video: {
+    facingMode: "environment",
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+  },
+};
 
 type ScanPhase =
   | { status: "scanning" }
@@ -22,40 +35,46 @@ export default function BarcodeScanner({ onResult, onSkip }: BarcodeScannerProps
   const [phase, setPhase] = useState<ScanPhase>({ status: "scanning" });
 
   useEffect(() => {
-    const reader = new BrowserMultiFormatReader();
+    const reader = new BrowserMultiFormatReader(DECODE_HINTS);
     readerRef.current = reader;
     hasScannedRef.current = false;
 
     if (!videoRef.current) return;
 
-    reader
-      .decodeFromVideoDevice(undefined, videoRef.current, async (result, err) => {
-        if (err && !(err instanceof NotFoundException)) return;
-        if (!result) return;
-        if (hasScannedRef.current) return;
+    navigator.mediaDevices
+      .getUserMedia(CAMERA_CONSTRAINTS)
+      .then((stream) => {
+        const deviceId = stream.getVideoTracks()[0]?.getSettings().deviceId;
+        stream.getTracks().forEach((t) => t.stop());
 
-        hasScannedRef.current = true;
-        const ean = result.getText();
-        setPhase({ status: "found", ean });
+        return reader.decodeFromVideoDevice(
+          deviceId,
+          videoRef.current!,
+          async (result, err) => {
+            if (err && !(err instanceof NotFoundException)) return;
+            if (!result) return;
+            if (hasScannedRef.current) return;
 
-        BrowserMultiFormatReader.releaseAllStreams();
+            hasScannedRef.current = true;
+            const ean = result.getText();
+            setPhase({ status: "found", ean });
 
-        setPhase({ status: "loading" });
-        try {
-          const data = await lookupBarcode(ean);
-          onResult(data.product_name ?? "", ean, data.suggested_group ?? null);
-        } catch {
-          setPhase({ status: "error", message: "Netzwerkfehler beim Abfragen der Produktdatenbank." });
-        }
+            BrowserMultiFormatReader.releaseAllStreams();
+
+            setPhase({ status: "loading" });
+            try {
+              const data = await lookupBarcode(ean);
+              onResult(data.product_name ?? "", ean, data.suggested_group ?? null);
+            } catch {
+              setPhase({ status: "error", message: "Netzwerkfehler beim Abfragen der Produktdatenbank." });
+            }
+          }
+        );
       })
       .catch((err) => {
         console.error("Camera error:", err);
         setPhase({ status: "error", message: "Kamera konnte nicht geöffnet werden. Bitte Berechtigung prüfen." });
       });
-
-    return () => {
-      BrowserMultiFormatReader.releaseAllStreams();
-    };
   }, []);
 
   return (
