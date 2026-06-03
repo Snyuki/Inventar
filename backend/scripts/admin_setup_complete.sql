@@ -38,6 +38,11 @@ COMMENT ON COLUMN item_groups.storage_id IS
 
 CREATE INDEX IF NOT EXISTS idx_item_groups_storage_id ON item_groups(storage_id);
 
+DO $$ BEGIN
+    ALTER TABLE item_groups ADD CONSTRAINT uq_item_groups_name_storage UNIQUE (group_name, storage_id);
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
 
 -- ------------------------------------------------------------
 -- 3. Group Templates

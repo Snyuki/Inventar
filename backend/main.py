@@ -283,6 +283,15 @@ async def list_groups(storage_id: str, user: str = Depends(get_current_user)):
 
 @app.post("/api/storages/{storage_id}/groups", response_model=GroupOut, status_code=201)
 async def create_group(storage_id: str, body: GroupIn, user: str = Depends(get_current_user)):
+    existing = await database.fetch_one(
+        groups_table.select().where(
+            (groups_table.c.group_name == body.group_name) &
+            (groups_table.c.storage_id == storage_id)
+        )
+    )
+    if existing:
+        raise HTTPException(409, f"Group '{body.group_name}' already exists in this storage")
+
     gid = str(uuid.uuid4())
     await database.execute(groups_table.insert().values(
         id=gid, group_name=body.group_name, storage_id=storage_id
