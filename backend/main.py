@@ -477,7 +477,6 @@ async def create_item(storage_id: str, group_id: str, body: ItemIn, user: str = 
                 ).values(ean=body.ean)
             )
 
-    
     iid = str(uuid.uuid4())
     kauf = date.today().isoformat()
     await database.execute(items_table.insert().values(
@@ -485,8 +484,22 @@ async def create_item(storage_id: str, group_id: str, body: ItemIn, user: str = 
         kaufdatum=kauf, ablaufdatum=body.ablaufdatum,
         name_to_group_id=reg_id, storage_id=storage_id,
     ))
-    await log_action(user, "CREATE", "item", iid, {"name": body.name, "group_id": group_id, "storage_id": storage_id, "ablaufdatum": body.ablaufdatum, "auto_restock": False})
-    return ItemOut(id=iid, name=body.name, kaufdatum=kauf, ablaufdatum=body.ablaufdatum, auto_restock=False)
+
+    await log_action(user, "CREATE", "item", iid, {
+        "name": body.name,
+        "group_id": group_id,
+        "storage_id": storage_id,
+        "ablaufdatum": body.ablaufdatum,
+        "auto_restock": existing["auto_restock"] if existing else False,
+    })
+
+    return ItemOut(
+        id=iid,
+        name=body.name,
+        kaufdatum=kauf,
+        ablaufdatum=body.ablaufdatum,
+        auto_restock=existing["auto_restock"] if existing else False,
+    )
 
 
 @app.get("/api/group-templates")
@@ -1079,6 +1092,9 @@ async def trigger_auto_restock(registry_id: str, user: str) -> Optional[Shopping
     )
 
     if existing:
+        if quantity_needed <= existing["quantity"]:
+            # Existing quantity is already higher
+            return None
         await database.execute(
             shopping_list_table.update()
             .where(shopping_list_table.c.id == str(existing["id"]))

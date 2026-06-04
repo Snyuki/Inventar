@@ -315,11 +315,16 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
         editMinStock,
         editRestockTarget,
       );
-      setGroups(prev => prev.map(g =>
-        g.id === editTarget.groupId
-          ? { ...g, items: g.items.map(i => i.id === updated.id ? updated : i) }
-          : g
-      ));
+      setGroups(prev => prev.map(g => ({
+        ...g,
+        items: g.items.map(i =>
+          i.id === updated.id
+            ? updated
+            : i.name === updated.name
+              ? { ...i, auto_restock: updated.auto_restock }
+              : i
+        ),
+      })));
       setEditOpen(false);
     } catch (e: any) {
       if (e.status === 409 && e.detail?.correct_group_name) {
@@ -879,23 +884,23 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
               </div>
 
               {editAutoRestock && (
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  <div className="flex justify-center gap-8 pt-1">
-                    <NumberScrollPicker
-                      value={editMinStock ?? 1}
-                      onChange={v => setEditMinStock(v)}
-                      min={1}
-                      max={20}
-                      label="Auffüllen bei"
-                    />
-                    <NumberScrollPicker
-                      value={editRestockTarget ?? 2}
-                      onChange={v => setEditRestockTarget(v)}
-                      min={1}
-                      max={20}
-                      label="Auffüllen auf"
-                    />
-                  </div>
+                <div className="flex justify-center gap-12 pt-2">
+                  <NumberScrollPicker
+                    value={editMinStock ?? 1}
+                    onChange={v => setEditMinStock(v)}
+                    min={1}
+                    max={20}
+                    label="Auffüllen bei"
+                    itemHeight={36}
+                  />
+                  <NumberScrollPicker
+                    value={editRestockTarget ?? 2}
+                    onChange={v => setEditRestockTarget(v)}
+                    min={1}
+                    max={20}
+                    label="Auffüllen auf"
+                    itemHeight={36}
+                  />
                 </div>
                   )}
               </div>
