@@ -1,4 +1,4 @@
-import { Item, ItemGroup, Storage } from "../types";
+import { BarcodeResult, DeleteItemResult, Item, ItemGroup, RestockSettings, ShoppingListItem, Storage } from "../types";
 import { supabase } from "./supabase";
 
 // Fallback to /api for dev stage
@@ -36,7 +36,7 @@ async function handleResponse(res: Response): Promise<any> {
             if (typeof body.detail === "string") {
                 message = body.detail;
             } else if (Array.isArray(body.detail)) {
-                message = body.detail.map((e: any) => e.msg).join(", ");
+                message = body.detail.map((e: any) => e.msg.replace(/^Value error,\s*/i, "")).join(", ");
             }
         } catch (e: any) {
             if (e.status === 409) throw e;      // Rethrow 409 conflict error again
@@ -90,6 +90,7 @@ export async function fetchGroups(storageId: string): Promise<ItemGroup[]> {
             name: i.name,
             kaufdatum: i.kaufdatum,
             ablaufdatum: i.ablaufdatum ?? null,
+            auto_restock: i.auto_restock ?? false,
         })),
     }));
 }
@@ -102,7 +103,9 @@ export async function updateGroup(groupId: string, groupName: string): Promise<I
     });
     const g = await handleResponse(res);
     return { id: g.id, groupName: g.group_name, items: g.items.map((i: any) => ({
-        id: i.id, name: i.name, kaufdatum: i.kaufdatum, ablaufdatum: i.expiry_date ?? null,
+        id: i.id, name: i.name, kaufdatum: i.kaufdatum,
+        ablaufdatum: i.ablaufdatum ?? null,
+        auto_restock: i.auto_restock ?? false,
     }))};
 }
 
@@ -131,29 +134,33 @@ export async function addItem(
         name: i.name,
         kaufdatum: i.kaufdatum,
         ablaufdatum: i.ablaufdatum ?? null,
+        auto_restock: i.auto_restock ?? false,
     }
 }
 
 export async function updateItem(
   itemId: string,
   name: string,
-  ablaufdatum: string | null
+  ablaufdatum: string | null,
+  auto_restock: boolean = false,
+  min_stock: number | null = null,
+  restock_target: number | null = null,
 ): Promise<Item> {
   const res = await fetch(`${BASE_URL}/items/${itemId}`, {
     method: "PUT",
     headers: await headers(),
-    body: JSON.stringify({ name, ablaufdatum: ablaufdatum || null }),
+    body: JSON.stringify({ name, ablaufdatum: ablaufdatum || null, auto_restock, min_stock, restock_target }),
   });
   const i = await handleResponse(res);
-  return { id: i.id, name: i.name, kaufdatum: i.kaufdatum, ablaufdatum: i.ablaufdatum ?? null };
-};
+  return { id: i.id, name: i.name, kaufdatum: i.kaufdatum, ablaufdatum: i.ablaufdatum ?? null, auto_restock: i.auto_restock ?? false };
+}
  
-export async function deleteItem(itemId: string): Promise<void> {
+export async function deleteItem(itemId: string): Promise<DeleteItemResult> {
   const res = await fetch(`${BASE_URL}/items/${itemId}`, {
     method: "DELETE",
     headers: await headers(),
   });
-  await handleResponse(res);
+  return handleResponse(res);
 }
 
 export async function fetchItemSuggestions(query: string): Promise<Array<{ name: string; groupName: string }>> {
@@ -163,17 +170,62 @@ export async function fetchItemSuggestions(query: string): Promise<Array<{ name:
     return handleResponse(res);
 }
 
-export interface BarcodeResult {
-    ean: string;
-    product_name: string | null;
-    brand: string | null;
-    quantity: string | null;
-    suggested_group: string | null;
-    from_cache: boolean;
-}
-
 export async function lookupBarcode(ean: string): Promise<BarcodeResult> {
     const res = await fetch(`${BASE_URL}/barcode/${ean}`, {
+        headers: await headers(),
+    });
+    return handleResponse(res);
+}
+ 
+
+// ---------------------------------------------------------------------------
+// Shopping List
+// ---------------------------------------------------------------------------
+ 
+ 
+export async function fetchShoppingList(): Promise<ShoppingListItem[]> {
+    const res = await fetch(`${BASE_URL}/shopping-list`, {
+        headers: await headers(),
+    });
+    return handleResponse(res);
+}
+ 
+export async function addShoppingListItem(item_name: string, quantity: number): Promise<ShoppingListItem> {
+    const res = await fetch(`${BASE_URL}/shopping-list`, {
+        method: "POST",
+        headers: await headers(),
+        body: JSON.stringify({ item_name, quantity }),
+    });
+    return handleResponse(res);
+}
+ 
+export async function patchShoppingListItem(id: string, updates: { checked_off?: boolean; quantity?: number }): Promise<ShoppingListItem> {
+    const res = await fetch(`${BASE_URL}/shopping-list/${id}`, {
+        method: "PATCH",
+        headers: await headers(),
+        body: JSON.stringify(updates),
+    });
+    return handleResponse(res);
+}
+ 
+export async function deleteShoppingListItem(id: string): Promise<void> {
+    const res = await fetch(`${BASE_URL}/shopping-list/${id}`, {
+        method: "DELETE",
+        headers: await headers(),
+    });
+    await handleResponse(res);
+}
+ 
+export async function clearCheckedShoppingListItems(): Promise<void> {
+    const res = await fetch(`${BASE_URL}/shopping-list`, {
+        method: "DELETE",
+        headers: await headers(),
+    });
+    await handleResponse(res);
+}
+
+export async function fetchRestockSettings(itemId: string): Promise<RestockSettings> {
+    const res = await fetch(`${BASE_URL}/items/${itemId}/restock-settings`, {
         headers: await headers(),
     });
     return handleResponse(res);

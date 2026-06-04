@@ -303,3 +303,43 @@ COMMENT ON COLUMN crud_logs.payload IS
 CREATE INDEX IF NOT EXISTS idx_crud_logs_timestamp   ON crud_logs(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_crud_logs_user_email  ON crud_logs(user_email);
 CREATE INDEX IF NOT EXISTS idx_crud_logs_entity_type ON crud_logs(entity_type);
+
+
+-- ------------------------------------------------------------
+-- 9. Auto-Restock fields on item_name_to_group_registry
+-- ------------------------------------------------------------
+ALTER TABLE item_name_to_group_registry
+    ADD COLUMN IF NOT EXISTS auto_restock   BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS min_stock      INTEGER,
+    ADD COLUMN IF NOT EXISTS restock_target INTEGER;
+
+COMMENT ON COLUMN item_name_to_group_registry.auto_restock IS
+    'Gibt an ob das Item automatisch zur Einkaufsliste hinzugefügt wird wenn der Vorrat unter min_stock fällt.';
+COMMENT ON COLUMN item_name_to_group_registry.min_stock IS
+    'Minimaler Vorrat bevor das Item zur Einkaufsliste hinzugefügt wird. Nur relevant wenn auto_restock = TRUE.';
+COMMENT ON COLUMN item_name_to_group_registry.restock_target IS
+    'Zielbestand nach dem Einkauf. Differenz zu aktuellem Bestand ergibt die Einkaufsmenge. Nur relevant wenn auto_restock = TRUE.';
+
+
+-- ------------------------------------------------------------
+-- 10. Shopping List (Einkaufsliste)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shopping_list (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    item_name       TEXT NOT NULL,
+    quantity        INTEGER NOT NULL DEFAULT 1,
+    source          TEXT NOT NULL DEFAULT 'manual', -- 'manual' or 'auto'
+    registry_id     UUID REFERENCES item_name_to_group_registry(id) ON DELETE SET NULL,
+    checked_off     BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_shopping_list_checked_off ON shopping_list(checked_off);
+CREATE INDEX IF NOT EXISTS idx_shopping_list_registry_id ON shopping_list(registry_id);
+
+COMMENT ON TABLE shopping_list IS
+    'Einkaufsliste. Einträge werden manuell oder automatisch via Auto-Restock hinzugefügt.';
+COMMENT ON COLUMN shopping_list.source IS
+    'Ursprung des Eintrags: manual (manuell) oder auto (Auto-Restock-Trigger).';
+COMMENT ON COLUMN shopping_list.registry_id IS
+    'Verweis auf item_name_to_group_registry. NULL für temporäre Items die nicht in der DB existieren.';

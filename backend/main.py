@@ -15,7 +15,7 @@ import jwt as pyjwt
 from jwt import PyJWKClient
 import databases
 import sqlalchemy
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from dotenv import load_dotenv
 
@@ -65,6 +65,9 @@ item_name_registry_table = sqlalchemy.Table(
     sqlalchemy.Column("group_id",   sqlalchemy.String, sqlalchemy.ForeignKey("item_groups.id"), nullable=False),
     sqlalchemy.Column("created_at", sqlalchemy.DateTime(timezone=True), nullable=True),
     sqlalchemy.Column("ean",        sqlalchemy.String, nullable=True),
+    sqlalchemy.Column("auto_restock",   sqlalchemy.Boolean, nullable=False, server_default=sqlalchemy.text("FALSE")),
+    sqlalchemy.Column("min_stock",      sqlalchemy.Integer, nullable=True),
+    sqlalchemy.Column("restock_target", sqlalchemy.Integer, nullable=True),
 )
 
 ean_product_cache_table = sqlalchemy.Table(
@@ -99,6 +102,18 @@ crud_logs_table = sqlalchemy.Table(
     sqlalchemy.Column("entity_type", sqlalchemy.String, nullable=False),
     sqlalchemy.Column("entity_id",   sqlalchemy.String, nullable=False),
     sqlalchemy.Column("payload",     sqlalchemy.JSON,   nullable=True),
+)
+
+shopping_list_table = sqlalchemy.Table(
+    "shopping_list",
+    metadata,
+    sqlalchemy.Column("id",          sqlalchemy.dialects.postgresql.UUID(as_uuid=False), primary_key=True, server_default=sqlalchemy.text("gen_random_uuid()")),
+    sqlalchemy.Column("created_at",  sqlalchemy.DateTime(timezone=True), nullable=False, server_default=sqlalchemy.text("now()")),
+    sqlalchemy.Column("item_name",   sqlalchemy.String, nullable=False),
+    sqlalchemy.Column("quantity",    sqlalchemy.Integer, nullable=False, server_default=sqlalchemy.text("1")),
+    sqlalchemy.Column("source",      sqlalchemy.String, nullable=False, server_default=sqlalchemy.text("'manual'")),
+    sqlalchemy.Column("registry_id", sqlalchemy.dialects.postgresql.UUID(as_uuid=False), nullable=True),
+    sqlalchemy.Column("checked_off", sqlalchemy.Boolean, nullable=False, server_default=sqlalchemy.text("FALSE")),
 )
 
 sync_url = DATABASE_URL.replace("+asyncpg", "")
@@ -206,7 +221,42 @@ class ItemOut(BaseModel):
     name: str
     kaufdatum: str
     ablaufdatum: Optional[str]
+    auto_restock: bool = False
 
+class ItemUpdate(BaseModel):
+    name: str
+    ablaufdatum: Optional[str] = None
+    ean: str | None = None
+    auto_restock: bool = False
+    min_stock: Optional[int] = None
+    restock_target: Optional[int] = None
+
+    @field_validator("ablaufdatum")
+    @classmethod
+    def validate_ablaufdatum(cls, v):
+        if v is None:
+            return v
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("Ablaufdatum must be in YYYY-MM-DD format")
+        try:
+            date.fromisoformat(v)
+        except ValueError:
+            raise ValueError(f"Invalid date: {v}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_restock_fields(self):
+        """
+        Ensures min_stock and restock_target are provided when auto_restock is enabled,
+        and that restock_target is greater than min_stock.
+        """
+        if self.auto_restock:
+            if self.min_stock is None or self.restock_target is None:
+                raise ValueError("Mindestbestand und Zielbestand sind erforderlich wenn Auto-Restock aktiviert ist")
+            if self.restock_target <= self.min_stock:
+                raise ValueError("Zielbestand muss größer als der Mindestbestand sein")
+        return self
+    
 class GroupOut(BaseModel):
     id: str
     group_name: str
@@ -229,6 +279,32 @@ class BarcodeResult(BaseModel):
     quantity: str | None
     suggested_group: str | None
     from_cache: bool
+
+class ShoppingListItemIn(BaseModel):
+    item_name: str
+    quantity: int = 1
+    registry_id: Optional[str] = None  # None for temporary/unknown items
+
+class ShoppingListItemOut(BaseModel):
+    id: str
+    item_name: str
+    quantity: int
+    source: str
+    registry_id: Optional[str]
+    checked_off: bool
+    created_at: str
+
+class ShoppingListItemPatch(BaseModel):
+    checked_off: Optional[bool] = None
+    quantity: Optional[int] = None
+
+class RestockSettingsOut(BaseModel):
+    auto_restock: bool
+    min_stock: Optional[int]
+    restock_target: Optional[int]
+
+class DeleteItemOut(BaseModel):
+    shopping_list_entry: Optional[ShoppingListItemOut] = None
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -262,11 +338,11 @@ async def list_groups(storage_id: str, user: str = Depends(get_current_user)):
     result = []
     for g in group_rows:
         item_rows = await database.fetch_all("""
-            SELECT i.id, r.item_name AS name, i.kaufdatum, i.ablaufdatum
+            SELECT i.id, r.item_name AS name, i.kaufdatum, i.ablaufdatum, r.auto_restock
             FROM items i
             JOIN item_name_to_group_registry r ON i.name_to_group_id = r.id
             WHERE i.group_id = :group_id
-              AND i.storage_id = :storage_id
+            AND i.storage_id = :storage_id
         """, values={"group_id": g["id"], "storage_id": storage_id})
         result.append(GroupOut(
             id=g["id"],
@@ -276,6 +352,7 @@ async def list_groups(storage_id: str, user: str = Depends(get_current_user)):
                 name=i["name"],
                 kaufdatum=i["kaufdatum"],
                 ablaufdatum=i["ablaufdatum"],
+                auto_restock=i["auto_restock"],
             ) for i in item_rows],
         ))
     return result
@@ -323,7 +400,7 @@ async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get
     )
 
     item_rows = await database.fetch_all("""
-        SELECT i.id, r.item_name AS name, i.kaufdatum, i.ablaufdatum
+        SELECT i.id, r.item_name AS name, i.kaufdatum, i.ablaufdatum, r.auto_restock
         FROM items i
         JOIN item_name_to_group_registry r ON i.name_to_group_id = r.id
         WHERE i.group_id = :group_id
@@ -331,7 +408,7 @@ async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get
 
     await log_action(user, "UPDATE", "group", group_id, {"group_name": body.group_name})
     return GroupOut(id=group_id, group_name=body.group_name, items=[
-        ItemOut(id=i["id"], name=i["name"], kaufdatum=i["kaufdatum"], ablaufdatum=i["ablaufdatum"])
+        ItemOut(id=i["id"], name=i["name"], kaufdatum=i["kaufdatum"], ablaufdatum=i["ablaufdatum"], auto_restock=i["auto_restock"])
         for i in item_rows
     ])
 
@@ -358,11 +435,19 @@ async def create_item(storage_id: str, group_id: str, body: ItemIn, user: str = 
         correct_group = await database.fetch_one(
             groups_table.select().where(groups_table.c.id == existing["group_id"])
         )
-        raise HTTPException(409, detail={
-            "message": "Item already registered under a different group",
-            "correct_group_id": existing["group_id"],
-            "correct_group_name": correct_group["group_name"],
-        })
+        if correct_group:
+            raise HTTPException(409, detail={
+                "message": "Item already registered under a different group",
+                "correct_group_id": existing["group_id"],
+                "correct_group_name": correct_group["group_name"],
+            })
+        else:
+            # The referenced group no longer exists — update the registry to point to the new group
+            await database.execute(
+                item_name_registry_table.update()
+                .where(item_name_registry_table.c.id == existing["id"])
+                .values(group_id=group_id)
+            )
 
     # Register in registry if not yet done
     if not existing:
@@ -400,8 +485,8 @@ async def create_item(storage_id: str, group_id: str, body: ItemIn, user: str = 
         kaufdatum=kauf, ablaufdatum=body.ablaufdatum,
         name_to_group_id=reg_id, storage_id=storage_id,
     ))
-    await log_action(user, "CREATE", "item", iid, {"name": body.name, "group_id": group_id, "storage_id": storage_id, "ablaufdatum": body.ablaufdatum})
-    return ItemOut(id=iid, name=body.name, kaufdatum=kauf, ablaufdatum=body.ablaufdatum)
+    await log_action(user, "CREATE", "item", iid, {"name": body.name, "group_id": group_id, "storage_id": storage_id, "ablaufdatum": body.ablaufdatum, "auto_restock": False})
+    return ItemOut(id=iid, name=body.name, kaufdatum=kauf, ablaufdatum=body.ablaufdatum, auto_restock=False)
 
 
 @app.get("/api/group-templates")
@@ -416,7 +501,7 @@ async def list_group_templates(user: str = Depends(get_current_user)):
 
 
 @app.put("/api/items/{item_id}", response_model=ItemOut)
-async def update_item(item_id: str, body: ItemIn, user: str = Depends(get_current_user)):
+async def update_item(item_id: str, body: ItemUpdate, user: str = Depends(get_current_user)):
     row = await database.fetch_one(
         items_table.select()
         .where(items_table.c.id == item_id)
@@ -470,11 +555,29 @@ async def update_item(item_id: str, body: ItemIn, user: str = Depends(get_curren
             )
         )
 
-    await log_action(user, "UPDATE", "item", item_id, {"name": body.name, "ablaufdatum": body.ablaufdatum})
-    return ItemOut(id=item_id, name=body.name, kaufdatum=row["kaufdatum"], ablaufdatum=body.ablaufdatum)
+    # Update auto-restock settings on registry entry
+    current_reg_id = reg_id if 'reg_id' in locals() else row["name_to_group_id"]
+    restock_values = {"auto_restock": body.auto_restock}
+    if body.min_stock is not None:
+        restock_values["min_stock"] = body.min_stock
+    if body.restock_target is not None:
+        restock_values["restock_target"] = body.restock_target
+    await database.execute(
+        item_name_registry_table.update()
+        .where(item_name_registry_table.c.id == str(current_reg_id))
+        .values(**restock_values)
+    )
+
+    await log_action(user, "UPDATE", "item", item_id, {
+        "name": body.name, "ablaufdatum": body.ablaufdatum,
+        "auto_restock": body.auto_restock,
+        "min_stock": body.min_stock,
+        "restock_target": body.restock_target,
+    })
+    return ItemOut(id=item_id, name=body.name, kaufdatum=row["kaufdatum"], ablaufdatum=body.ablaufdatum, auto_restock=body.auto_restock)
 
 
-@app.delete("/api/items/{item_id}", status_code=204)
+@app.delete("/api/items/{item_id}", response_model=DeleteItemOut)
 async def delete_item(item_id: str, user: str = Depends(get_current_user)):
     row = await database.fetch_one(
         items_table.select()
@@ -496,7 +599,14 @@ async def delete_item(item_id: str, user: str = Depends(get_current_user)):
         "name": registry_row["item_name"] if registry_row else None,
         "group_id": row["group_id"],
         "name_to_group_id": str(name_to_group_id) if name_to_group_id else None,
+        "auto_restock": registry_row["auto_restock"] if registry_row else None,
+        "min_stock": registry_row["min_stock"] if registry_row else None,
+        "restock_target": registry_row["restock_target"] if registry_row else None,
     })
+
+    shopping_list_entry: Optional[ShoppingListItemOut] = None
+    if name_to_group_id:
+        shopping_list_entry = await trigger_auto_restock(str(name_to_group_id), user)
 
     # Delete Item
     await database.execute(items_table.delete().where(items_table.c.id == item_id))
@@ -504,8 +614,8 @@ async def delete_item(item_id: str, user: str = Depends(get_current_user)):
     # Check if group is now empty
     if name_to_group_id:
         remaining_with_same_name = await database.fetch_val(
-            "SELECT COUNT(*) FROM items WHERE name_to_group_id = :reg_id",
-            values={"reg_id": name_to_group_id}
+            "SELECT COUNT(*) FROM items WHERE name_to_group_id::text = :reg_id",
+            values={"reg_id": str(name_to_group_id)}
         )
 
         if remaining_with_same_name == 0:
@@ -538,6 +648,8 @@ async def delete_item(item_id: str, user: str = Depends(get_current_user)):
     )
     if remaining_in_group == 0:
         await database.execute(groups_table.delete().where(groups_table.c.id == row["group_id"]))
+
+    return DeleteItemOut(shopping_list_entry=shopping_list_entry)
 
 
 @app.get("/api/items/suggestions")
@@ -671,6 +783,196 @@ async def lookup_barcode(ean: str, user: str = Depends(get_current_user)):
     )
 
 
+@app.get("/api/shopping-list", response_model=list[ShoppingListItemOut])
+async def get_shopping_list(user: str = Depends(get_current_user)):
+    """
+    Returns all shopping list entries, unchecked first, ordered by creation date.
+    """
+    rows = await database.fetch_all(
+        shopping_list_table.select().order_by(
+            shopping_list_table.c.checked_off.asc(),
+            shopping_list_table.c.created_at.asc(),
+        )
+    )
+    return [ShoppingListItemOut(
+        id=str(r["id"]),
+        item_name=r["item_name"],
+        quantity=r["quantity"],
+        source=r["source"],
+        registry_id=str(r["registry_id"]) if r["registry_id"] else None,
+        checked_off=r["checked_off"],
+        created_at=r["created_at"].isoformat(),
+    ) for r in rows]
+
+
+@app.post("/api/shopping-list", response_model=ShoppingListItemOut, status_code=201)
+async def add_shopping_list_item(body: ShoppingListItemIn, user: str = Depends(get_current_user)):
+    """
+    Manually adds an item to the shopping list.
+    If an unchecked entry for the same item already exists, its quantity is incremented instead.
+    If no registry_id is provided, attempts to resolve it from the item name registry.
+    Items not found in the registry are added as temporary entries (registry_id = NULL).
+    """
+    # Check if an unchecked entry for this item already exists — update quantity instead
+    existing = await database.fetch_one(
+        shopping_list_table.select().where(
+            (shopping_list_table.c.item_name == body.item_name) &
+            (shopping_list_table.c.checked_off == False)
+        )
+    )
+    if existing:
+        new_qty = existing["quantity"] + body.quantity
+        await database.execute(
+            shopping_list_table.update()
+            .where(shopping_list_table.c.id == str(existing["id"]))
+            .values(quantity=new_qty)
+        )
+        await log_action(user, "UPDATE", "shopping_list", str(existing["id"]), {
+            "item_name": body.item_name, "quantity": new_qty, "source": constants.SHOPPING_LIST_SOURCE_MANUAL
+        })
+        return ShoppingListItemOut(
+            id=str(existing["id"]),
+            item_name=existing["item_name"],
+            quantity=new_qty,
+            source=existing["source"],
+            registry_id=str(existing["registry_id"]) if existing["registry_id"] else None,
+            checked_off=False,
+            created_at=existing["created_at"].isoformat(),
+        )
+
+    # Resolve registry_id if not provided
+    registry_id = body.registry_id
+    if not registry_id:
+        reg = await database.fetch_one(
+            item_name_registry_table.select().where(
+                item_name_registry_table.c.item_name == body.item_name
+            )
+        )
+        registry_id = str(reg["id"]) if reg else None
+
+    sid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    await database.execute(shopping_list_table.insert().values(
+        id=sid,
+        item_name=body.item_name,
+        quantity=body.quantity,
+        source=constants.SHOPPING_LIST_SOURCE_MANUAL,
+        registry_id=registry_id,
+        checked_off=False,
+        created_at=now,
+    ))
+    await log_action(user, "CREATE", "shopping_list", sid, {
+        "item_name": body.item_name, "quantity": body.quantity, "source": constants.SHOPPING_LIST_SOURCE_MANUAL
+    })
+    return ShoppingListItemOut(
+        id=sid,
+        item_name=body.item_name,
+        quantity=body.quantity,
+        source=constants.SHOPPING_LIST_SOURCE_MANUAL,
+        registry_id=registry_id,
+        checked_off=False,
+        created_at=now.isoformat(),
+    )
+
+
+@app.patch("/api/shopping-list/{item_id}", response_model=ShoppingListItemOut)
+async def patch_shopping_list_item(item_id: str, body: ShoppingListItemPatch, user: str = Depends(get_current_user)):
+    """
+    Partially updates a shopping list entry.
+    Supports checking/unchecking and changing the quantity.
+    """
+    row = await database.fetch_one(
+        shopping_list_table.select().where(shopping_list_table.c.id == item_id)
+    )
+    if not row:
+        raise HTTPException(404, "Shopping list item not found")
+
+    updates = {}
+    if body.checked_off is not None:
+        updates["checked_off"] = body.checked_off
+    if body.quantity is not None:
+        updates["quantity"] = body.quantity
+
+    if updates:
+        await database.execute(
+            shopping_list_table.update()
+            .where(shopping_list_table.c.id == item_id)
+            .values(**updates)
+        )
+        await log_action(user, "UPDATE", "shopping_list", item_id, updates)
+
+    updated = {**dict(row), **updates}
+    return ShoppingListItemOut(
+        id=str(updated["id"]),
+        item_name=updated["item_name"],
+        quantity=updated["quantity"],
+        source=updated["source"],
+        registry_id=str(updated["registry_id"]) if updated["registry_id"] else None,
+        checked_off=updated["checked_off"],
+        created_at=updated["created_at"].isoformat(),
+    )
+
+
+@app.delete("/api/shopping-list/{item_id}", status_code=204)
+async def delete_shopping_list_item(item_id: str, user: str = Depends(get_current_user)):
+    """
+    Permanently removes a single shopping list entry.
+    """
+    row = await database.fetch_one(
+        shopping_list_table.select().where(shopping_list_table.c.id == item_id)
+    )
+    if not row:
+        raise HTTPException(404, "Shopping list item not found")
+    await database.execute(
+        shopping_list_table.delete().where(shopping_list_table.c.id == item_id)
+    )
+    await log_action(user, "DELETE", "shopping_list", item_id, {
+        "item_name": row["item_name"], "quantity": row["quantity"], "source": row["source"]
+    })
+
+
+@app.delete("/api/shopping-list", status_code=204)
+async def clear_checked_shopping_list_items(user: str = Depends(get_current_user)):
+    """
+    Permanently removes all checked-off entries from the shopping list.
+    """
+    rows = await database.fetch_all(
+        shopping_list_table.select().where(shopping_list_table.c.checked_off == True)
+    )
+    await database.execute(
+        shopping_list_table.delete().where(shopping_list_table.c.checked_off == True)
+    )
+    await log_action(user, "DELETE", "shopping_list", "bulk", {
+        "cleared_count": len(rows), "source": "clear_checked"
+    })
+
+
+@app.get("/api/items/{item_id}/restock-settings", response_model=RestockSettingsOut)
+async def get_restock_settings(item_id: str, user: str = Depends(get_current_user)):
+    """
+    Returns the auto-restock settings for the registry entry linked to this item.
+    """
+    row = await database.fetch_one(
+        items_table.select().where(items_table.c.id == item_id)
+    )
+    if not row:
+        raise HTTPException(404, "Item not found")
+    if not row["name_to_group_id"]:
+        return RestockSettingsOut(auto_restock=False, min_stock=None, restock_target=None)
+    reg = await database.fetch_one(
+        item_name_registry_table.select().where(
+            item_name_registry_table.c.id == str(row["name_to_group_id"])
+        )
+    )
+    if not reg:
+        return RestockSettingsOut(auto_restock=False, min_stock=None, restock_target=None)
+    return RestockSettingsOut(
+        auto_restock=reg["auto_restock"],
+        min_stock=reg["min_stock"],
+        restock_target=reg["restock_target"],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
@@ -736,3 +1038,93 @@ async def log_action(user: str, action: str, entity_type: str, entity_id: str, p
         ))
     except Exception as e:
         print(f"Warning: Failed to write audit log: {e}")
+
+
+async def trigger_auto_restock(registry_id: str, user: str) -> Optional[ShoppingListItemOut]:
+    """
+    Checks if the remaining stock of an item has fallen below its min_stock threshold.
+    If so, calculates the quantity needed to reach restock_target and adds/updates
+    a shopping list entry. Should be called after every item deletion.
+    """
+    reg = await database.fetch_one(
+        item_name_registry_table.select().where(
+            item_name_registry_table.c.id == registry_id
+        )
+    )
+    if not reg or not reg["auto_restock"]:
+        return None
+    if reg["min_stock"] is None or reg["restock_target"] is None:
+        return None
+
+    # Count remaining stock across all storages
+    current_stock = await database.fetch_val(
+        "SELECT COUNT(*) FROM items WHERE name_to_group_id::text = :reg_id",
+        values={"reg_id": registry_id}
+    )
+
+    stock_after_deletion = current_stock - 1
+    if stock_after_deletion > reg["min_stock"]:
+        return None
+
+    quantity_needed = reg["restock_target"] - stock_after_deletion
+    if quantity_needed <= 0:
+        return None
+
+    # Check if an unchecked entry already exists — update it instead of inserting
+    existing = await database.fetch_one(
+        shopping_list_table.select().where(
+            (sqlalchemy.cast(shopping_list_table.c.registry_id, sqlalchemy.String) == registry_id) &
+            (shopping_list_table.c.checked_off == False)
+        )
+    )
+
+    if existing:
+        await database.execute(
+            shopping_list_table.update()
+            .where(shopping_list_table.c.id == str(existing["id"]))
+            .values(quantity=quantity_needed)
+        )
+        await log_action(user, "UPDATE", "shopping_list", str(existing["id"]), {
+            "item_name": reg["item_name"],
+            "quantity": quantity_needed,
+            "source": constants.SHOPPING_LIST_SOURCE_AUTO,
+            "reason": "auto_restock_trigger",
+            "current_stock": current_stock,
+        })
+        return ShoppingListItemOut(
+            id=str(existing["id"]),
+            item_name=existing["item_name"],
+            quantity=quantity_needed,
+            source=existing["source"],
+            registry_id=str(existing["registry_id"]) if existing["registry_id"] else None,
+            checked_off=False,
+            created_at=existing["created_at"].isoformat(),
+        )
+    else:
+        sid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        await database.execute(shopping_list_table.insert().values(
+            id=sid,
+            item_name=reg["item_name"],
+            quantity=quantity_needed,
+            source=constants.SHOPPING_LIST_SOURCE_AUTO,
+            registry_id=registry_id,
+            checked_off=False,
+            created_at=now,
+        ))
+        await log_action(user, "CREATE", "shopping_list", sid, {
+            "item_name": reg["item_name"],
+            "quantity": quantity_needed,
+            "source": constants.SHOPPING_LIST_SOURCE_AUTO,
+            "reason": "auto_restock_trigger",
+            "current_stock": current_stock,
+        })
+        return ShoppingListItemOut(
+            id=sid,
+            item_name=reg["item_name"],
+            quantity=quantity_needed,
+            source=constants.SHOPPING_LIST_SOURCE_AUTO,
+            registry_id=registry_id,
+            checked_off=False,
+            created_at=now.isoformat(),
+        )

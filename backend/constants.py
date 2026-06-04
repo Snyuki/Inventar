@@ -22,3 +22,13 @@ OFF_QUERY_TIMEOUT_IN_SECONDS = 8.0
 The Base URL to the OFF Database API.
 """
 OFF_QUERY_BASE_URL = "https://world.openfoodfacts.org/api/v2/product"
+
+"""
+Shopping list source string for manual insertion
+"""
+SHOPPING_LIST_SOURCE_MANUAL = "manual"
+
+"""
+Shopping list source string for automatic insertion
+"""
+SHOPPING_LIST_SOURCE_AUTO   = "auto"

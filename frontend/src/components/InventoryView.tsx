@@ -1,27 +1,30 @@
-import { useState, useMemo, useEffect, useRef } from "react";
 import * as Accordion from "@radix-ui/react-accordion";
-import * as Dialog from "@radix-ui/react-dialog";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import * as Dialog from "@radix-ui/react-dialog";
+import { format } from "date-fns";
 import {
   ChevronDown,
+  Edit,
   Plus,
+  RefreshCw,
+  Search,
   Trash2,
   X,
-  Edit,
-  Search,
 } from "lucide-react";
-import { format } from "date-fns";
-import { Item, ItemGroup } from "../types";
-import { itemStatus, groupStatus, earliestExpiry } from "../lib/utils";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchGroups,
-  createGroup,
   addItem,
-  updateItem,
+  createGroup,
   deleteItem,
+  fetchGroups,
   fetchItemSuggestions,
+  fetchRestockSettings,
+  updateItem,
 } from "../lib/api";
+import { earliestExpiry, groupStatus, itemStatus } from "../lib/utils";
+import { Item, ItemGroup, ShoppingListItem } from "../types";
 import BarcodeScanner from "./BarcodeScanner";
+import NumberScrollPicker from "./NumberScrollPicker";
 
 // -------------------------------------------------------------------
 // Types
@@ -31,22 +34,24 @@ type DeleteTarget = { groupId: string; itemId: string } | null;
 type ATGTarget    = string | null;
 
 interface VisualGroup {
-    key: string;
-    name: string;
-    ablaufdatum: string | null;
-    count: number;
-    representativeId: string; // ID of one item, used for edit/delete
-    groupId: string;
-    groupName: string;
+  key: string;
+  name: string;
+  ablaufdatum: string | null;
+  count: number;
+  representativeId: string; // ID of one item, used for edit/delete
+  groupId: string;
+  groupName: string;
+  autoRestock: boolean;
 }
 
 interface Props {
-    storageId: string;
-    groupTemplates: string[];
+  storageId: string;
+  groupTemplates: string[];
+  onAutoRestock?: (entry: ShoppingListItem) => void;
 }
 
 
-export default function InventoryView({ storageId, groupTemplates }: Props) {
+export default function InventoryView({ storageId, groupTemplates, onAutoRestock }: Props) {
   // Data
   const [groups, setGroups]                 = useState<ItemGroup[]>([]);
   const [dataError, setDataError]           = useState<string | null>(null);
@@ -84,6 +89,12 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
   const [nameSuggestions, setNameSuggestions] = useState<Array<{ name: string; groupName: string }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
+  // Restock
+  const [editAutoRestock,   setEditAutoRestock]   = useState(false);
+  const [editMinStock,      setEditMinStock]       = useState<number | null>(null);
+  const [editRestockTarget, setEditRestockTarget] = useState<number | null>(null);
+  const [restockLoading,    setRestockLoading]    = useState(false);
+
   // UI state
   const [search,        setSearch]        = useState("");
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
@@ -116,6 +127,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
     { id: "expiring", label: "Expiring Soon", color: "yellow" },
     { id: "ok",       label: "Not Expired",   color: "green"  },
     { id: "noexp",    label: "No Expiry",     color: "gray"   },
+    { id: "auto_restock", label: "Auto-Restock",   color: "blue"   },
   ];
 
     // ---- Swipe helpers --------------------------------------------------
@@ -188,12 +200,15 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
   // ---- CRUD -----------------------------------------------------------
   const deleteItemDirectly = async (groupId: string, itemId: string) => {
     try {
-      await deleteItem(itemId);
+      const result = await deleteItem(itemId);
       setGroups(prev =>
         prev
           .map(g => g.id === groupId ? { ...g, items: g.items.filter(i => i.id !== itemId) } : g)
           .filter(g => g.items.length > 0)
       );
+      if (result?.shopping_list_entry && onAutoRestock) {
+        onAutoRestock(result.shopping_list_entry);
+      }
     } catch {
       alert("Failed to delete item.");
     }
@@ -267,18 +282,39 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
     }
   };
 
-  const openEdit = (groupId: string, item: Item) => {
+  const openEdit = async (groupId: string, item: Item) => {
     setEditTarget({ groupId, item });
     setEditName(item.name);
     setEditExpiry(item.ablaufdatum ?? "");
+    setEditAutoRestock(false);
+    setEditMinStock(null);
+    setEditRestockTarget(null);
     setEditOpen(true);
-  };
+    setRestockLoading(true);
+    try {
+      const settings = await fetchRestockSettings(item.id);
+      setEditAutoRestock(settings.auto_restock);
+      setEditMinStock(settings.min_stock);
+      setEditRestockTarget(settings.restock_target);
+    } catch {
+      // Non-critical — restock settings default to off
+    } finally {
+      setRestockLoading(false);
+    }
+};
 
   const handleSaveEdit = async () => {
     if (!editTarget || !editName.trim()) return;
     setFormError(null);
     try {
-      const updated = await updateItem(editTarget.item.id, editName.trim(), editExpiry || null);
+      const updated = await updateItem(
+        editTarget.item.id,
+        editName.trim(),
+        editExpiry || null,
+        editAutoRestock,
+        editMinStock,
+        editRestockTarget,
+      );
       setGroups(prev => prev.map(g =>
         g.id === editTarget.groupId
           ? { ...g, items: g.items.map(i => i.id === updated.id ? updated : i) }
@@ -302,7 +338,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
     setDeleteLoading(true);
     setFormError(null);
     try {
-      await deleteItem(deleteTarget.itemId);
+      const result = await deleteItem(deleteTarget.itemId);
       setGroups(prev =>
         prev
           .map(g => g.id === deleteTarget.groupId
@@ -311,6 +347,9 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
           .filter(g => g.items.length > 0)
       );
       setDeleteOpen(false);
+      if (result?.shopping_list_entry && onAutoRestock) {
+        onAutoRestock(result.shopping_list_entry);
+      }
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Failed to delete item.");
     } finally {
@@ -328,8 +367,10 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
       group.items.forEach(item => {
         const s = itemStatus(item);
         const matchText   = !q || item.name.toLowerCase().includes(q) || group.groupName.toLowerCase().includes(q);
-        const matchFilter = activeFilters.length === 0 || activeFilters.includes(s) ||
-          (activeFilters.includes("ok") && s === "expiring");
+        const matchFilter = activeFilters.length === 0 ||
+          activeFilters.includes(s) ||
+          (activeFilters.includes("ok") && s === "expiring") ||
+          (activeFilters.includes("auto_restock") && item.auto_restock);
         if (matchText && matchFilter) allItems.push({ item, groupName: group.groupName, groupId: group.id });
       })
     );
@@ -354,6 +395,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
       yellow: active ? "bg-yellow-500 text-white" : "bg-yellow-100 text-yellow-700 hover:bg-yellow-200",
       green:  active ? "bg-green-600 text-white"  : "bg-green-100 text-green-700 hover:bg-green-200",
       gray:   active ? "bg-gray-600 text-white"   : "bg-gray-100 text-gray-700 hover:bg-gray-200",
+      blue:   active ? "bg-blue-600 text-white"   : "bg-blue-100 text-blue-700 hover:bg-blue-200",
     };
     return `${base} ${map[color]}`;
   };
@@ -421,6 +463,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
           representativeId: item.id,
           groupId,
           groupName,
+          autoRestock: item.auto_restock,
         });
       }
     }
@@ -474,7 +517,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
       {!dataLoading && !dataError && (isSearching ? (
         <div className="space-y-2">
           {searchResults.length > 0 ? searchResults.map(vg => {
-            const { cls, label, s } = itemDateInfo({ id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" });
+            const { cls, label, s } = itemDateInfo({ id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "", auto_restock: vg.autoRestock });
             const border = s === "expired" ? "border-red-400" : s === "expiring" ? "border-yellow-400" : "border-gray-200";
             const bg     = s === "expired" ? "bg-red-50"      : s === "expiring" ? "bg-yellow-50"      : "bg-white";
             return (
@@ -496,13 +539,19 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
                     {vg.count > 1 && (
                       <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium flex-shrink-0">×{vg.count}</span>
                     )}
+                    {vg.autoRestock && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-green-50 text-green-600 rounded-full text-xs font-medium flex-shrink-0">
+                        <RefreshCw className="w-2.5 h-2.5" />
+                        auto
+                      </span>
+                    )}
                   </div>
                   {/* Bottom row: date + action buttons */}
                   <div className="flex items-center justify-between sm:justify-end gap-2">
                     <span className={`text-sm ${cls}`}>{label}</span>
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <button
-                        onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" })}
+                        onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "", auto_restock: vg.autoRestock })}
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
                       >
                         <Edit className="w-4 h-4" />
@@ -571,7 +620,7 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
                   <div className="bg-gray-50 p-4 border-t border-gray-200">
                     <div className="space-y-2">
                       {toVisualGroups(group.items, group.id, group.groupName).map(vg => {
-                        const { cls, label, s } = itemDateInfo({ id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" });
+                        const { cls, label, s } = itemDateInfo({ id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "", auto_restock: vg.autoRestock });
                         return (
                           <div key={vg.key} className="relative overflow-hidden rounded border border-gray-200 swipeable-item">
                             <div className="absolute inset-0 bg-red-600 flex items-center justify-end px-6">
@@ -591,13 +640,19 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
                                 {vg.count > 1 && (
                                   <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium flex-shrink-0">×{vg.count}</span>
                                 )}
+                                {vg.autoRestock && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-green-50 text-green-600 rounded-full text-xs font-medium flex-shrink-0">
+                                    <RefreshCw className="w-2.5 h-2.5" />
+                                    auto
+                                  </span>
+                                )}
                               </div>
                               {/* Bottom row: date + action buttons */}
                               <div className="flex items-center justify-between xs:justify-end gap-2">
                                 <span className={`text-sm ${cls}`}>{label}</span>
                                 <div className="flex items-center gap-1 flex-shrink-0">
                                   <button
-                                    onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "" })}
+                                    onClick={() => openEdit(vg.groupId, { id: vg.representativeId, name: vg.name, ablaufdatum: vg.ablaufdatum, kaufdatum: "", auto_restock: vg.autoRestock })}
                                     className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
                                   >
                                     <Edit className="w-4 h-4" />
@@ -776,7 +831,15 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
       </Dialog.Root>
 
       {/* ── Edit dialog ── */}
-      <Dialog.Root open={editOpen} onOpenChange={(open) => { setEditOpen(open); if (!open) setFormError(null); }}>
+      <Dialog.Root open={editOpen} onOpenChange={(open) => {
+          setEditOpen(open);
+          if (!open) {
+              setFormError(null);
+              setEditAutoRestock(false);
+              setEditMinStock(null);
+              setEditRestockTarget(null);
+          }
+      }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95" aria-describedby={undefined}>
@@ -793,6 +856,50 @@ export default function InventoryView({ storageId, groupTemplates }: Props) {
                 <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
                 <input type="date" value={editExpiry} onChange={e => setEditExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
+
+              {/* Auto-restock toggle */}
+              <div className="border border-gray-200 rounded-lg p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                <div>
+                <p className="text-sm font-medium text-gray-700">Auto-Restock</p>
+                <p className="text-xs text-gray-400">Automatisch zur Einkaufsliste hinzufügen</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={restockLoading}
+                  onClick={() => setEditAutoRestock(v => !v)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    editAutoRestock ? "bg-blue-600" : "bg-gray-200"
+                  } ${restockLoading ? "opacity-50" : ""}`}
+                >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                  editAutoRestock ? "translate-x-6" : "translate-x-1"
+                }`} />
+                </button>
+              </div>
+
+              {editAutoRestock && (
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div className="flex justify-center gap-8 pt-1">
+                    <NumberScrollPicker
+                      value={editMinStock ?? 1}
+                      onChange={v => setEditMinStock(v)}
+                      min={1}
+                      max={20}
+                      label="Auffüllen bei"
+                    />
+                    <NumberScrollPicker
+                      value={editRestockTarget ?? 2}
+                      onChange={v => setEditRestockTarget(v)}
+                      min={1}
+                      max={20}
+                      label="Auffüllen auf"
+                    />
+                  </div>
+                </div>
+                  )}
+              </div>
+
               {formError && (
                 <p className="text-sm text-red-600">{formError}</p>
               )}

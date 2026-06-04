@@ -15,3 +15,7 @@
   .animate-accordion-down { animation: accordion-down 0.18s ease-out; }
   .animate-accordion-up   { animation: accordion-up 0.18s ease-out; }
 }
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
