@@ -21,7 +21,7 @@ import {
   fetchRestockSettings,
   updateItem,
 } from "../lib/api";
-import { earliestExpiry, groupStatus, itemStatus } from "../lib/utils";
+import { earliestExpiry, groupStatus, itemStatus, sortItemsByExpiry } from "../lib/utils";
 import { Item, ItemGroup, ShoppingListItem } from "../types";
 import BarcodeScanner from "./BarcodeScanner";
 import NumberScrollPicker from "./NumberScrollPicker";
@@ -113,7 +113,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
       setDataLoading(true);
       setDataError(null);
       fetchGroups(storageId)
-      .then(setGroups)
+      .then(data => setGroups(data.map(g => ({ ...g, items: sortItemsByExpiry(g.items) }))))
       .catch(() => setDataError("Failed to load inventory. Is the backend running?"))
       .finally(() => setDataLoading(false));
   }, [storageId]);
@@ -228,7 +228,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
           const item = await addItem(storageId, existingGroup.id, newName.trim(), newExpiry || null, scannedEan);
           newItems.push(item);
         }
-        setGroups(prev => prev.map(g => g.id === existingGroup.id ? { ...g, items: [...g.items, ...newItems] } : g));
+        setGroups(prev => prev.map(g => g.id === existingGroup.id ? { ...g, items: sortItemsByExpiry([...g.items, ...newItems]) } : g));
       } else {
         const group = await createGroup(storageId, newGroup.trim());   // Note: This is the active groups; not the templates
         const newItems: Item[] = [];
@@ -236,7 +236,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
           const item = await addItem(storageId, group.id, newName.trim(), newExpiry || null);
           newItems.push(item);
         }
-        setGroups(prev => [...prev, { ...group, items: newItems }]);
+        setGroups(prev => [...prev, { ...group, items: sortItemsByExpiry(newItems) }]);
       }
 
       setNewGroup("");
@@ -269,7 +269,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
           addItem(storageId, group.id, atgName.trim() || group.groupName, atgExpiry || null, scannedEan)
         )
       );
-      setGroups(prev => prev.map(g => g.id === atgTarget ? { ...g, items: [...g.items, ...newItems] } : g));
+      setGroups(prev => prev.map(g => g.id === atgTarget ? { ...g, items: sortItemsByExpiry([...g.items, ...newItems]) } : g));
       
       setAtgExpiry("");
       setAtgName("");
@@ -317,13 +317,13 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
       );
       setGroups(prev => prev.map(g => ({
         ...g,
-        items: g.items.map(i =>
+        items: sortItemsByExpiry(g.items.map(i =>
           i.id === updated.id
             ? updated
             : i.name === updated.name
               ? { ...i, auto_restock: updated.auto_restock }
               : i
-        ),
+        )),
       })));
       setEditOpen(false);
     } catch (e: any) {

@@ -34,3 +34,12 @@ export function earliestExpiry(group: ItemGroup): string | null {
     .sort();
   return dates[0] ?? null;
 }
+
+export function sortItemsByExpiry(items: Item[]): Item[] {
+  return [...items].sort((a, b) => {
+    if (!a.ablaufdatum && !b.ablaufdatum) return 0;
+    if (!a.ablaufdatum) return 1;
+    if (!b.ablaufdatum) return -1;
+    return a.ablaufdatum.localeCompare(b.ablaufdatum);
+  });
+}

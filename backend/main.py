@@ -343,6 +343,9 @@ async def list_groups(storage_id: str, user: str = Depends(get_current_user)):
             JOIN item_name_to_group_registry r ON i.name_to_group_id = r.id
             WHERE i.group_id = :group_id
             AND i.storage_id = :storage_id
+            ORDER BY
+                CASE WHEN i.ablaufdatum IS NULL THEN 1 ELSE 0 END,
+                i.ablaufdatum ASC
         """, values={"group_id": g["id"], "storage_id": storage_id})
         result.append(GroupOut(
             id=g["id"],
@@ -404,6 +407,9 @@ async def update_group(group_id: str, body: GroupUpdate, user: str = Depends(get
         FROM items i
         JOIN item_name_to_group_registry r ON i.name_to_group_id = r.id
         WHERE i.group_id = :group_id
+        ORDER BY
+            CASE WHEN i.ablaufdatum IS NULL THEN 1 ELSE 0 END,
+            i.ablaufdatum ASC
     """, values={"group_id": group_id})
 
     await log_action(user, "UPDATE", "group", group_id, {"group_name": body.group_name})
