@@ -107,7 +107,16 @@ export default function App() {
 
             {/* Left: title */}
             <div className="flex-1">
-              <h2 className="text-gray-900">Inventar</h2>
+              <button
+                onClick={() => {
+                  const defaultStorage = storages.find(s => s.name === DEFAULT_STORAGE) ?? storages[0];
+                  if (defaultStorage) setActiveStorageId(defaultStorage.id);
+                  setActiveView("inventory");
+                }}
+                className="text-gray-900 transition-colors"
+              >
+                Inventar
+              </button>
             </div>
 
             {/* Center: Storage Switch */}
