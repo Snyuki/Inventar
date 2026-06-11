@@ -3,6 +3,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import { format } from "date-fns";
 import {
+  Camera,
   ChevronDown,
   Edit,
   Loader2,
@@ -24,7 +25,7 @@ import {
   updateItem,
 } from "../lib/api";
 import { earliestExpiry, groupStatus, itemStatus, sortItemsByExpiry } from "../lib/utils";
-import { Item, ItemGroup, ShoppingListItem } from "../types";
+import { Item, ItemGroup, PreferredInput, ShoppingListItem } from "../types";
 import BarcodeScanner from "./BarcodeScanner";
 import NumberScrollPicker from "./NumberScrollPicker";
 
@@ -50,10 +51,11 @@ interface Props {
   storageId: string;
   groupTemplates: string[];
   onAutoRestock?: (entry: ShoppingListItem) => void;
+  preferredInput: PreferredInput;
 }
 
 
-export default function InventoryView({ storageId, groupTemplates, onAutoRestock }: Props) {
+export default function InventoryView({ storageId, groupTemplates, onAutoRestock, preferredInput }: Props) {
   // Data
   const [groups, setGroups]                 = useState<ItemGroup[]>([]);
   const [dataError, setDataError]           = useState<string | null>(null);
@@ -556,7 +558,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
         <h1>Inventory List</h1>
         <button
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          onClick={() => { setNewGroup(""); setNewName(""); setNewExpiry(""); setAddOpen(true); setScannerOpen(true); }}
+          onClick={() => { setNewGroup(""); setNewName(""); setNewExpiry(""); setAddOpen(true); if (preferredInput === "scanner") setScannerOpen(true); }}
         >
           <Plus className="w-4 h-4" /> Add Item
         </button>
@@ -680,8 +682,8 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
                     <div
                       role="button"
                       tabIndex={0}
-                      onClick={e => { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); setScannerOpen(true); }}
-                      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); setScannerOpen(true); } }}
+                      onClick={e => { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); if (preferredInput === "scanner") setScannerOpen(true); }}
+                      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setAtgTarget(group.id); setAtgExpiry(""); setAtgName(group.groupName); setAtgOpen(true); if (preferredInput === "scanner") setScannerOpen(true); } }}
                       className="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors cursor-pointer"
                     >
                       <Plus className="w-4 h-4" />
@@ -805,7 +807,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
                           onChange={e => {
                             const val = e.target.value.replace(/\D/g, "");
                             setManualEan(val);
-                            if (val.length === 13 || val.length === 8) {
+                            if (val.length === 13) {
                               handleManualEanLookup(val, setNewName, setNewGroup);
                             }
                           }}
@@ -815,8 +817,18 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
                             }
                           }}
                           placeholder="EAN eingeben..."
-                          className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                          className="w-full px-3 py-2 pr-16 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                         />
+                        {/* Camera button */}
+                        <button
+                          type="button"
+                          onClick={() => setScannerOpen(true)}
+                          disabled={eanLookupLoading}
+                          className="absolute right-8 top-1/2 -translate-y-1/2 text-gray-700 hover:text-blue-500 disabled:opacity-30 transition-colors"
+                        >
+                          <Camera className="w-4 h-4" />
+                        </button>
+                        {/* Search button */}
                         <button
                           type="button"
                           onClick={() => handleManualEanLookup(manualEan, setNewName, setNewGroup)}
@@ -951,7 +963,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
                           onChange={e => {
                             const val = e.target.value.replace(/\D/g, "");
                             setManualEan(val);
-                            if (val.length === 13 || val.length === 8) {
+                            if (val.length === 13) {
                               handleManualEanLookup(val, setAtgName);
                             }
                           }}
@@ -961,8 +973,18 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
                             }
                           }}
                           placeholder="EAN eingeben..."
-                          className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                          className="w-full px-3 py-2 pr-16 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                         />
+                        {/* Camera button */}
+                        <button
+                          type="button"
+                          onClick={() => setScannerOpen(true)}
+                          disabled={eanLookupLoading}
+                          className="absolute right-8 top-1/2 -translate-y-1/2 text-gray-700 hover:text-blue-500 disabled:opacity-30 transition-colors"
+                        >
+                          <Camera className="w-4 h-4" />
+                        </button>
+                        {/* Search button */}
                         <button
                           type="button"
                           onClick={() => handleManualEanLookup(manualEan, setAtgName)}

@@ -1,3 +1,5 @@
+export type PreferredInput = "scanner" | "manual";
+
 export interface Item {
   id: string;
   name: string;

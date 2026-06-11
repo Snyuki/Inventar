@@ -1,4 +1,4 @@
-import { BarcodeResult, DeleteItemResult, Item, ItemGroup, RestockSettings, ShoppingListItem, Storage } from "../types";
+import { BarcodeResult, DeleteItemResult, Item, ItemGroup, RestockSettings, ShoppingListItem, Storage, PreferredInput } from "../types";
 import { supabase } from "./supabase";
 
 // Fallback to /api for dev stage
@@ -57,6 +57,13 @@ export async function checkWhitelist(token: string): Promise<boolean> {
         },
     });
     return res.ok;
+}
+
+export async function savePreferredInput(value: PreferredInput): Promise<void> {
+  const { error } = await supabase.auth.updateUser({
+    data: { preferred_input: value },
+  });
+  if (error) throw new Error(error.message);
 }
 
 export async function fetchStorages(): Promise<Storage[]> {

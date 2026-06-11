@@ -3,24 +3,29 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Settings, LogOut, Download, SlidersHorizontal, RefreshCw } from "lucide-react";
 import LoginScreen from "./components/LoginScreen";
 import InventoryView from "./components/InventoryView";
-import { ShoppingListItem, Storage } from "./types";
+import { PreferredInput, ShoppingListItem, Storage } from "./types";
 import { supabase } from "./lib/supabase";
 import { AuthChangeEvent, Session } from "@supabase/supabase-js";
-import { checkWhitelist, fetchGroupTemplates, fetchStorages } from "./lib/api";
+import { checkWhitelist, fetchGroupTemplates, fetchStorages, savePreferredInput } from "./lib/api";
 import { DEFAULT_STORAGE } from "./lib/constants";
 import ShoppingListView from "./components/ShoppingListView";
+import SettingsModal from "./components/SettingsModal";
 
 
 export default function App() {
   // Auth
-  const [session, setSession]           = useState<Session | null>(null);
-  const [checkingAuth, setCheckingAuth] = useState(false);
-  const [authError, setAuthError]       = useState<string | null>(null);
+  const [session, setSession]               = useState<Session | null>(null);
+  const [checkingAuth, setCheckingAuth]     = useState(false);
+  const [authError, setAuthError]           = useState<string | null>(null);
+  const [preferredInput, setPreferredInput] = useState<PreferredInput>("scanner");
 
   // Storage
   const [storages, setStorages]               = useState<Storage[]>([]);
   const [activeStorageId, setActiveStorageId] = useState<string | null>(null);
   const [activeView, setActiveView]           = useState<"inventory" | "shopping-list">("inventory");
+
+  // Settings
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Data
   const [groupTemplates, setGroupTemplates] = useState<string[]>([]);
@@ -43,10 +48,12 @@ export default function App() {
           } else {
             setSession(session);
             setAuthError(null);
+            applyUserPrefs(session);
           }
         } catch (e) {
           console.error("Whitelist check failed:", e);
           setSession(session);
+          applyUserPrefs(session);
         }
       } else {
         setSession(null);
@@ -62,7 +69,24 @@ export default function App() {
     setSession(null);
   };
 
-  // ---- Load storages once authenticated --------------------------------
+  // ---- Setting Handlers -----------------------------------------------
+  const handlePreferredInputChange = async (value: PreferredInput) => {
+    setPreferredInput(value);
+    try {
+      await savePreferredInput(value);
+    } catch (e) {
+      console.error("Failed to save preference:", e);
+    }
+  };
+  
+  const applyUserPrefs = (session: Session) => {
+    const savedPref = session.user.user_metadata?.preferred_input;
+    if (savedPref === "scanner" || savedPref === "manual") {
+      setPreferredInput(savedPref);
+    }
+  };
+
+  // ---- Load storages once authenticated -------------------------------
   useEffect(() => {
     if (!session) return;
     fetchStorages().then(data => {
@@ -199,7 +223,10 @@ export default function App() {
                 </DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                   <DropdownMenu.Content className="min-w-[170px] bg-white rounded-xl shadow-lg border border-gray-200 p-1 z-50">
-                    <DropdownMenu.Item className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg cursor-pointer outline-none">
+                    <DropdownMenu.Item
+                      onClick={() => setSettingsOpen(true)}
+                      className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg cursor-pointer outline-none"
+                    >
                       <SlidersHorizontal className="w-4 h-4" /> Settings
                     </DropdownMenu.Item>
                     <DropdownMenu.Item className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg cursor-pointer outline-none">
@@ -231,6 +258,7 @@ export default function App() {
               storageId={activeStorageId}
               groupTemplates={groupTemplates}
               onAutoRestock={handleAutoRestock}
+              preferredInput={preferredInput}
             />
           )
         )}
@@ -250,6 +278,14 @@ export default function App() {
           {toast}
         </div>
       )}
+
+      <SettingsModal
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        email={session?.user.email ?? ""}
+        preferredInput={preferredInput}
+        onPreferredInputChange={handlePreferredInputChange}
+      />
 
     </div>
   );
