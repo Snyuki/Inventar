@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import {
   ChevronDown,
   Edit,
+  Loader2,
   Plus,
   RefreshCw,
   Search,
@@ -19,6 +20,7 @@ import {
   fetchGroups,
   fetchItemSuggestions,
   fetchRestockSettings,
+  lookupBarcode,
   updateItem,
 } from "../lib/api";
 import { earliestExpiry, groupStatus, itemStatus, sortItemsByExpiry } from "../lib/utils";
@@ -82,18 +84,22 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
   const [atgName, setAtgName]                 = useState("");
 
   // Barcode
-  const [scannedEan, setScannedEan]   = useState<string | null>(null);
-  const [eanNotFound, setEanNotFound] = useState<string | null>(null);
+  const [scannedEan, setScannedEan]             = useState<string | null>(null);
+  const [eanNotFound, setEanNotFound]           = useState<string | null>(null);
+  const [manualEan, setManualEan]               = useState("");
+  const [eanLookupLoading, setEanLookupLoading] = useState(false);
+  const [eanDone, setEanDone]                   = useState(false);
+  const [focusEan, setFocusEan]                 = useState(false);
 
   // Autocomplete
   const [nameSuggestions, setNameSuggestions] = useState<Array<{ name: string; groupName: string }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   // Restock
-  const [editAutoRestock,   setEditAutoRestock]   = useState(false);
+  const [editAutoRestock,   setEditAutoRestock]    = useState(false);
   const [editMinStock,      setEditMinStock]       = useState<number | null>(null);
-  const [editRestockTarget, setEditRestockTarget] = useState<number | null>(null);
-  const [restockLoading,    setRestockLoading]    = useState(false);
+  const [editRestockTarget, setEditRestockTarget]  = useState<number | null>(null);
+  const [restockLoading,    setRestockLoading]     = useState(false);
 
   // UI state
   const [search,        setSearch]        = useState("");
@@ -107,6 +113,9 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
   } | null>(null);
   const [touchStart, setTouchStart] = useState<number | null>(null);
 
+  // Refs
+  const eanInputRef                             = useRef<HTMLInputElement>(null);
+
   // ---- Data loading ---------------------------------------------------
   // Load Inventory
   useEffect(() => {
@@ -117,6 +126,14 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
       .catch(() => setDataError("Failed to load inventory. Is the backend running?"))
       .finally(() => setDataLoading(false));
   }, [storageId]);
+
+  // ---- Focus EAN field ------------------------------------------------
+  useEffect(() => {
+    if (focusEan && !scannerOpen) {
+      eanInputRef.current?.focus();
+      setFocusEan(false);
+    }
+  }, [scannerOpen, focusEan]);
 
   // ---- Filter helpers -------------------------------------------------
   const toggleFilter = (f: string) =>
@@ -130,7 +147,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
     { id: "auto_restock", label: "Auto-Restock",   color: "blue"   },
   ];
 
-    // ---- Swipe helpers --------------------------------------------------
+  // ---- Swipe helpers --------------------------------------------------
   const handleTouchStart = (e: React.TouchEvent, itemId: string) => {
     const target = e.currentTarget.closest(".swipeable-item") as HTMLElement;
     if (!target) return;
@@ -197,7 +214,62 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
     setShowSuggestions(false);
   }
 
+
+  // ---- On Close helpers -----------------------------------------------
+  const resetAddDialog = () => {
+    setFormError(null);
+    setNewCount(1);
+    setNameSuggestions([]);
+    setShowSuggestions(false);
+    setScannerOpen(false);
+    setScannedEan(null);
+    setEanNotFound(null);
+    setManualEan("");
+    setEanDone(false);
+    setNewName("");
+    setNewGroup("");
+    setNewExpiry("");
+  };
+
+  const resetAtgDialog = () => {
+    setFormError(null);
+    setAtgCount(1);
+    setAtgName("");
+    setAtgExpiry("");
+    setScannerOpen(false);
+    setScannedEan(null);
+    setEanNotFound(null);
+    setManualEan("");
+    setEanDone(false);
+  };
+
   // ---- CRUD -----------------------------------------------------------
+  const handleManualEanLookup = async (
+    ean: string,
+    setName: (n: string) => void,
+    setGroup?: (g: string) => void,
+  ) => {
+    if (!ean.trim()) return;
+    setEanLookupLoading(true);
+    setEanNotFound(null);
+    try {
+      const data = await lookupBarcode(ean.trim());
+      if (data.product_name) {
+        setName(data.product_name);
+        if (setGroup && data.suggested_group) setGroup(data.suggested_group);
+      } else {
+        setEanNotFound(ean.trim());
+      }
+      setScannedEan(ean.trim());
+    } catch {
+      setEanNotFound(ean.trim());
+    } finally {
+      setEanLookupLoading(false);
+      setManualEan("");
+      setEanDone(true);
+    }
+  };
+
   const deleteItemDirectly = async (groupId: string, itemId: string) => {
     try {
       const result = await deleteItem(itemId);
@@ -688,7 +760,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
       {/* ── Add Item dialog ── */}
       <Dialog.Root open={addOpen} onOpenChange={(open) => { 
         setAddOpen(open);
-        if (!open) setFormError(null); setNewCount(1); setNameSuggestions([]); setShowSuggestions(false); setScannerOpen(false); setScannedEan(null); setEanNotFound(null); ;
+        if (!open) resetAddDialog();
         }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
@@ -704,73 +776,129 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
                     if (name) setNewName(name); else setEanNotFound(ean);
                     if (suggestedGroup) setNewGroup(suggestedGroup);
                     setScannedEan(ean || null);
+                    setEanDone(true);
                     setScannerOpen(false);
                   }}
-                  onSkip={() => setScannerOpen(false)}
+                  onSkip={() => { setScannerOpen(false); setFocusEan(true); }}
                 />
               )}
               {!scannerOpen && (
-              <div className="relative">
-                <label className="block mb-2 text-sm text-gray-700">Item Name</label>
-                <input
-                  type="text"
-                  value={newName}
-                  onChange={e => handleNewNameChange(e.target.value)}
-                  onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-                  placeholder="e.g., Milch, Gouda, Butter"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                {showSuggestions && (
-                  <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
-                    {nameSuggestions.map(s => (
-                      <button
-                        key={`${s.name}-${s.groupName}`}
-                        type="button"
-                        onMouseDown={e => e.preventDefault()}
-                        onClick={() => handleSuggestionSelect(s)}
-                        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50 active:bg-gray-100 border-b border-gray-100 last:border-0"
+                <>
+                  {!eanDone && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block mb-2 text-sm text-gray-700">EAN</label>
+                        <button
+                          type="button"
+                          onClick={() => setEanDone(true)}
+                          className="mt-1.5 text-sm text-gray-400 hover:text-gray-600 underline"
+                        >
+                          Überspringen
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={manualEan}
+                          ref={eanInputRef}
+                          onChange={e => {
+                            const val = e.target.value.replace(/\D/g, "");
+                            setManualEan(val);
+                            if (val.length === 13 || val.length === 8) {
+                              handleManualEanLookup(val, setNewName, setNewGroup);
+                            }
+                          }}
+                          onKeyDown={e => {
+                            if (e.key === "Enter" && (manualEan.length === 8 || manualEan.length === 13)) {
+                              handleManualEanLookup(manualEan, setNewName, setNewGroup);
+                            }
+                          }}
+                          placeholder="EAN eingeben..."
+                          className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleManualEanLookup(manualEan, setNewName, setNewGroup)}
+                          disabled={eanLookupLoading || (manualEan.length !== 8 && manualEan.length !== 13)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-700 hover:text-blue-500 disabled:opacity-30 transition-colors"
+                        >
+                          {eanLookupLoading
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <Search className="w-4 h-4" />
+                          }
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className={!eanDone ? "opacity-50 pointer-events-none space-y-4" : "space-y-4"}>
+                    <div className="relative">
+                      <label className="block mb-2 text-sm text-gray-700">Item Name</label>
+                      <input
+                        type="text"
+                        value={newName}
+                        onChange={e => handleNewNameChange(e.target.value)}
+                        onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                        placeholder="e.g., Milch, Gouda, Butter"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      {showSuggestions && (
+                        <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                          {nameSuggestions.map(s => (
+                            <button
+                              key={`${s.name}-${s.groupName}`}
+                              type="button"
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => handleSuggestionSelect(s)}
+                              className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50 active:bg-gray-100 border-b border-gray-100 last:border-0"
+                            >
+                              <span className="text-gray-900">{s.name}</span>
+                              <span className="text-sm text-gray-400">{s.groupName}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {eanNotFound && (
+                        <p className="text-xs text-yellow-600 mt-1 ml-1">
+                          Produkt für EAN {eanNotFound} nicht gefunden.
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block mb-2 text-sm text-gray-700">Group Name</label>
+                      <select
+                        value={newGroup}
+                        onChange={e => setNewGroup(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                       >
-                        <span className="text-gray-900">{s.name}</span>
-                        <span className="text-sm text-gray-400">{s.groupName}</span>
-                      </button>
-                    ))}
+                        <option value="">-- Select a group --</option>
+                        {groupTemplates.map(group => (
+                          <option key={group} value={group}>{group}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
+                      <input
+                        type="date"
+                        value={newExpiry}
+                        onChange={e => setNewExpiry(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <CountPicker value={newCount} onChange={setNewCount} />
+                    {formError && <p className="text-sm text-red-600">{formError}</p>}
+                    <button
+                      onClick={handleAddItem}
+                      disabled={insertItemLoading}
+                      className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      {insertItemLoading ? "Adding..." : "Add Item"}
+                    </button>
                   </div>
-                )}
-                {eanNotFound && (
-                  <p className="text-xs text-yellow-600 mt-1 ml-1">
-                    Produkt für EAN {eanNotFound} nicht gefunden.
-                  </p>
-                )}
-              </div>
+                </>
               )}
-              <div>
-                <label className="block mb-2 text-sm text-gray-700">Group Name</label>
-                <select
-                  value={newGroup}
-                  onChange={e => setNewGroup(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                >
-                  <option value="">-- Select a group --</option>
-                  {groupTemplates.map(group => (
-                    <option key={group} value={group}>{group}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
-                <input type="date" value={newExpiry} onChange={e => setNewExpiry(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <CountPicker value={newCount} onChange={setNewCount} />
-              {formError && (
-                <p className="text-sm text-red-600">{formError}</p>
-              )}
-              <button
-                onClick={handleAddItem}
-                disabled={insertItemLoading || !newGroup.trim() || !newName.trim()}
-                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {insertItemLoading ? "Wird hinzugefügt..." : "Add Item"}
-              </button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -779,7 +907,7 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
       {/* ── Add to Group dialog ── */}
       <Dialog.Root open={atgOpen} onOpenChange={(open) => { 
         setAtgOpen(open); 
-        if (!open) setFormError(null); setAtgCount(1); setAtgName(""); setScannerOpen(false); setScannedEan(null); setEanNotFound(null);
+        if (!open) resetAtgDialog();
         }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
@@ -794,42 +922,98 @@ export default function InventoryView({ storageId, groupTemplates, onAutoRestock
                   onResult={(name, ean, _suggestedGroup) => {
                     if (name) setAtgName(name); else setEanNotFound(ean);
                     setScannedEan(ean || null);
+                    setEanDone(true);
                     setScannerOpen(false);
                   }}
-                  onSkip={() => setScannerOpen(false)}
+                  onSkip={() => { setScannerOpen(false); setFocusEan(true); }}
                 />
               )}
               {!scannerOpen && (
-              <div>
-                <label className="block mb-2 text-sm text-gray-700">Item Name</label>
-                <input
-                  type="text"
-                  value={atgName}
-                  onChange={e => setAtgName(e.target.value)}
-                  placeholder={`e.g. ${atgTarget ? groups.find(g => g.id === atgTarget)?.groupName : ""}`}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                {eanNotFound && (
-                  <p className="text-xs text-yellow-600 mt-1 ml-1">
-                    Produkt für EAN {eanNotFound} nicht gefunden.
-                  </p>
-                )}
-              </div>
+                <>
+                  {!eanDone && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block mb-2 text-sm text-gray-700">EAN</label>
+                        <button
+                          type="button"
+                          onClick={() => setEanDone(true)}
+                          className="mt-1.5 text-sm text-gray-400 hover:text-gray-600 underline"
+                        >
+                          Überspringen
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={manualEan}
+                          ref={eanInputRef}
+                          onChange={e => {
+                            const val = e.target.value.replace(/\D/g, "");
+                            setManualEan(val);
+                            if (val.length === 13 || val.length === 8) {
+                              handleManualEanLookup(val, setAtgName);
+                            }
+                          }}
+                          onKeyDown={e => {
+                            if (e.key === "Enter" && (manualEan.length === 8 || manualEan.length === 13)) {
+                              handleManualEanLookup(manualEan, setAtgName);
+                            }
+                          }}
+                          placeholder="EAN eingeben..."
+                          className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleManualEanLookup(manualEan, setAtgName)}
+                          disabled={eanLookupLoading || (manualEan.length !== 8 && manualEan.length !== 13)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-700 hover:text-blue-500 disabled:opacity-30 transition-colors"
+                        >
+                          {eanLookupLoading
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <Search className="w-4 h-4" />
+                          }
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className={!eanDone ? "opacity-50 pointer-events-none space-y-4" : "space-y-4"}>
+                    <div>
+                      <label className="block mb-2 text-sm text-gray-700">Item Name</label>
+                      <input
+                        type="text"
+                        value={atgName}
+                        onChange={e => setAtgName(e.target.value)}
+                        placeholder={`e.g. ${atgTarget ? groups.find(g => g.id === atgTarget)?.groupName : ""}`}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      {eanNotFound && (
+                        <p className="text-xs text-yellow-600 mt-1 ml-1">
+                          Produkt für EAN {eanNotFound} nicht gefunden.
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
+                      <input
+                        type="date"
+                        value={atgExpiry}
+                        onChange={e => setAtgExpiry(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <CountPicker value={atgCount} onChange={setAtgCount} />
+                    {formError && <p className="text-sm text-red-600">{formError}</p>}
+                    <button
+                      onClick={handleAddToGroup}
+                      className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                    >
+                      Add Item
+                    </button>
+                  </div>
+                </>
               )}
-              <div>
-                <label className="block mb-2 text-sm text-gray-700">Expiry Date <span className="text-gray-400">(optional)</span></label>
-                <input 
-                  type="date" 
-                  value={atgExpiry} 
-                  onChange={e => setAtgExpiry(e.target.value)} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                />
-              </div>
-              <CountPicker value={atgCount} onChange={setAtgCount} />
-              {formError && (
-                <p className="text-sm text-red-600">{formError}</p>
-              )}
-              <button onClick={handleAddToGroup} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">Add Item</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

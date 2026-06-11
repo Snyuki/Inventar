@@ -19,3 +19,7 @@
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+input, select, textarea {
+  font-size: 16px;
+}
